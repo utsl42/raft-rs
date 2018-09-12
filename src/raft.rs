@@ -33,7 +33,7 @@ use protobuf::RepeatedField;
 use rand::{self, Rng};
 
 use super::errors::{Error, Result, StorageError};
-use super::progress::{CandidacyStatus, Progress, ProgressSet, ProgressState};
+use super::progress::{CandidacyStatus, Configuration, Progress, ProgressSet, ProgressState};
 use super::raft_log::{self, RaftLog};
 use super::read_only::{ReadOnly, ReadOnlyOption, ReadState};
 use super::storage::Storage;
@@ -1848,6 +1848,13 @@ impl<T: Storage> Raft<T> {
         // before the added node has a chance to commuicate with us.
         self.mut_prs().get_mut(id).unwrap().recent_active = true;
         result
+    }
+
+    /// Begin the process of changing the cluster's peer configuration to a new one.
+    ///
+    /// This should only be called on the leader.
+    pub fn set_nodes(&mut self, config: impl Into<Configuration>) -> Result<()> {
+        self.mut_prs().begin_joint(config.into())
     }
 
     /// Adds a new node to the cluster.

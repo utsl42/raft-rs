@@ -53,9 +53,31 @@ impl Default for ProgressState {
 }
 
 #[derive(Clone, Debug, Default)]
-struct Configuration {
+pub struct Configuration {
     voters: FxHashSet<u64>,
     learners: FxHashSet<u64>,
+}
+
+impl<V, L> From<(V, L)> for Configuration
+where
+    V: IntoIterator<Item = u64>,
+    L: IntoIterator<Item = u64>,
+{
+    fn from((voters, learners): (V, L)) -> Self {
+        Self {
+            voters: voters.into_iter().collect(),
+            learners: learners.into_iter().collect(),
+        }
+    }
+}
+
+impl Configuration {
+    fn with_capacity(voters: usize, learners: usize) -> Self {
+        Self {
+            voters: HashSet::with_capacity_and_hasher(voters, FxBuildHasher::default()),
+            learners: HashSet::with_capacity_and_hasher(learners, FxBuildHasher::default()),
+        }
+    }
 }
 
 /// The status of an election according to a Candidate node.
@@ -71,12 +93,125 @@ pub enum CandidacyStatus {
     Ineligible,
 }
 
+/// The configuration state of the `ProgressSet`. It is used to determine how quorums are accounted for.
+#[derive(Clone, Debug, Default)]
+pub struct ConfigurationState {
+    /// The cluster is not in a changing configuration. It has only one quorum. It is in a steady state.
+    current: Configuration,
+    /// The cluster is currently in a changing configuration. It has two seperate quorums which must agree before progressing.
+    next: Option<Configuration>,
+}
+
+impl ConfigurationState {
+    /// Create a new configuration state with the given sizes.
+    pub fn with_capacity(voters: usize, learners: usize) -> Self {
+        Self {
+            current: Configuration::with_capacity(voters, learners),
+            next: None,
+        }
+    }
+
+    /// Adds a voter node.
+    pub fn insert_voter(&mut self, id: u64) -> Result<(), Error> {
+        if self.learners().contains(&id) {
+            Err(Error::Exists(id, "learners"))?;
+        } else if self.voters().contains(&id) {
+            Err(Error::Exists(id, "voters"))?;
+        }
+        self.current.voters.insert(id);
+        self.next.as_mut().map(|config| config.voters.insert(id));
+        Ok(())
+    }
+
+    /// Returns the ids of all known voters.
+    #[inline]
+    pub fn voters(&self) -> FxHashSet<u64> {
+        match self.next {
+            Some(ref next) => self
+                .current
+                .voters
+                .union(&next.voters)
+                .cloned()
+                .collect::<FxHashSet<u64>>(),
+            None => self.current.voters.clone(),
+        }
+    }
+
+    /// Returns the ids of all known learners.
+    #[inline]
+    pub fn learners(&self) -> FxHashSet<u64> {
+        match self.next {
+            Some(ref next) => self
+                .current
+                .learners
+                .union(&next.learners)
+                .cloned()
+                .collect::<FxHashSet<u64>>(),
+            None => self.current.learners.clone(),
+        }
+    }
+
+    /// Promote a learner to a peer.
+    pub fn promote_learner(&mut self, id: u64) -> Result<(), Error> {
+        if !self.current.learners.remove(&id) {
+            // Wasn't already a voter. We can't promote what doesn't exist.
+            return Err(Error::Exists(id, "learners"));
+        }
+        if !self.current.voters.insert(id) {
+            // Already existed, the caller should know this was a noop.
+            return Err(Error::Exists(id, "voters"));
+        }
+        if let Some(ref mut next) = self.next {
+            if !next.learners.remove(&id) {
+                // Wasn't already a voter. We can't promote what doesn't exist.
+                // Rollback change above.
+                self.current.voters.remove(&id);
+                self.current.learners.insert(id);
+                return Err(Error::Exists(id, "next learners"));
+            }
+            if !next.voters.insert(id) {
+                // Already existed, the caller should know this was a noop.
+                // Rollback change above.
+                self.current.voters.remove(&id);
+                self.current.learners.insert(id);
+                return Err(Error::Exists(id, "next voters"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a learner to the cluster
+    pub fn insert_learner(&mut self, id: u64) -> Result<(), Error> {
+        if self.learners().contains(&id) {
+            Err(Error::Exists(id, "learners"))?;
+        } else if self.voters().contains(&id) {
+            Err(Error::Exists(id, "voters"))?;
+        }
+
+        self.current.learners.insert(id);
+        if let Some(ref mut next) = self.next {
+            next.learners.insert(id);
+        }
+        Ok(())
+    }
+
+    /// Removes the peer from the set of voters or learners.
+    pub fn remove(&mut self, id: u64) {
+        self.current.learners.remove(&id);
+        self.current.voters.remove(&id);
+        if let Some(ref mut next) = self.next {
+            next.learners.remove(&id);
+            next.voters.remove(&id);
+        };
+    }
+}
+
 /// `ProgressSet` contains several `Progress`es,
 /// which could be `Leader`, `Follower` and `Learner`.
 #[derive(Default, Clone)]
 pub struct ProgressSet {
     progress: FxHashMap<u64, Progress>,
-    configuration: Configuration,
+    configuration: ConfigurationState,
 }
 
 impl ProgressSet {
@@ -95,31 +230,28 @@ impl ProgressSet {
                 voters + learners,
                 FxBuildHasher::default(),
             ),
-            configuration: Configuration {
-                voters: HashSet::with_capacity_and_hasher(voters, FxBuildHasher::default()),
-                learners: HashSet::with_capacity_and_hasher(learners, FxBuildHasher::default()),
-            },
+            configuration: ConfigurationState::with_capacity(voters, learners),
         }
     }
 
     /// Returns the status of voters.
     #[inline]
     pub fn voters(&self) -> impl Iterator<Item = (&u64, &Progress)> {
-        let set = self.voter_ids();
+        let set = self.configuration.voters();
         self.progress.iter().filter(move |(&k, _)| set.contains(&k))
     }
 
     /// Returns the status of learners.
     #[inline]
     pub fn learners(&self) -> impl Iterator<Item = (&u64, &Progress)> {
-        let set = self.learner_ids();
+        let set = self.configuration.learners();
         self.progress.iter().filter(move |(&k, _)| set.contains(&k))
     }
 
     /// Returns the mutable status of voters.
     #[inline]
     pub fn voters_mut(&mut self) -> impl Iterator<Item = (&u64, &mut Progress)> {
-        let ids = &self.configuration.voters;
+        let ids = self.configuration.voters();
         self.progress
             .iter_mut()
             .filter(move |(k, _)| ids.contains(k))
@@ -128,7 +260,7 @@ impl ProgressSet {
     /// Returns the mutable status of learners.
     #[inline]
     pub fn learners_mut(&mut self) -> impl Iterator<Item = (&u64, &mut Progress)> {
-        let ids = &self.configuration.learners;
+        let ids = self.configuration.learners();
         self.progress
             .iter_mut()
             .filter(move |(k, _)| ids.contains(k))
@@ -136,14 +268,14 @@ impl ProgressSet {
 
     /// Returns the ids of all known voters.
     #[inline]
-    pub fn voter_ids(&self) -> &FxHashSet<u64> {
-        &self.configuration.voters
+    pub fn voter_ids(&self) -> FxHashSet<u64> {
+        self.configuration.voters()
     }
 
     /// Returns the ids of all known learners.
     #[inline]
-    pub fn learner_ids(&self) -> &FxHashSet<u64> {
-        &self.configuration.learners
+    pub fn learner_ids(&self) -> FxHashSet<u64> {
+        self.configuration.learners()
     }
 
     /// Grabs a reference to the progress of a node.
@@ -180,7 +312,7 @@ impl ProgressSet {
             }
             return Err(Error::Exists(id, "voters"));
         }
-        self.configuration.voters.insert(id);
+        self.configuration.insert_voter(id)?;
         self.progress.insert(id, pr);
         self.assert_progress_and_configuration_consistent();
         Ok(())
@@ -196,7 +328,7 @@ impl ProgressSet {
             }
             return Err(Error::Exists(id, "voters"));
         }
-        self.configuration.learners.insert(id);
+        self.configuration.insert_learner(id)?;
         self.progress.insert(id, pr);
         self.assert_progress_and_configuration_consistent();
         Ok(())
@@ -204,8 +336,7 @@ impl ProgressSet {
 
     /// Removes the peer from the set of voters or learners.
     pub fn remove(&mut self, id: u64) -> Option<Progress> {
-        self.configuration.voters.remove(&id);
-        self.configuration.learners.remove(&id);
+        self.configuration.remove(id);
         let removed = self.progress.remove(&id);
         self.assert_progress_and_configuration_consistent();
         removed
@@ -213,14 +344,7 @@ impl ProgressSet {
 
     /// Promote a learner to a peer.
     pub fn promote_learner(&mut self, id: u64) -> Result<(), Error> {
-        if !self.configuration.learners.remove(&id) {
-            // Wasn't already a voter. We can't promote what doesn't exist.
-            return Err(Error::Exists(id, "learners"));
-        }
-        if !self.configuration.voters.insert(id) {
-            // Already existed, the caller should know this was a noop.
-            return Err(Error::Exists(id, "voters"));
-        }
+        self.configuration.promote_learner(id)?;
         self.assert_progress_and_configuration_consistent();
         Ok(())
     }
@@ -229,18 +353,18 @@ impl ProgressSet {
     fn assert_progress_and_configuration_consistent(&self) {
         debug_assert!(
             self.configuration
-                .voters
-                .union(&self.configuration.learners)
+                .voters()
+                .union(&self.configuration.learners())
                 .all(|v| self.progress.contains_key(v))
         );
         debug_assert!(
             self.progress
                 .keys()
-                .all(|v| self.configuration.learners.contains(v)
-                    || self.configuration.voters.contains(v))
+                .all(|v| self.configuration.learners().contains(v)
+                    || self.configuration.voters().contains(v))
         );
         assert_eq!(
-            self.configuration.voters.len() + self.configuration.learners.len(),
+            self.configuration.voters().len() + self.configuration.learners().len(),
             self.progress.len()
         );
     }
@@ -319,6 +443,11 @@ impl ProgressSet {
     /// Determine if a quorum is formed from the given set of nodes.
     pub fn has_quorum(&self, potential_quorum: &FxHashSet<u64>) -> bool {
         potential_quorum.len() >= majority(self.voter_ids().len())
+    }
+
+    /// Enter a joint into the given configuration.
+    pub fn begin_joint(&mut self, config: Configuration) -> Result<(), Error> {
+        unimplemented!();
     }
 }
 
