@@ -87,10 +87,16 @@ impl Configuration {
     pub fn valid(&self) -> Result<(), Error> {
         if let Some(id) = self.voters.intersection(&self.learners).next() {
             Err(Error::Exists(*id, "learners"))?;
-        } else if self.voters.len() == 0 {
-            Err(Error::ConfigInvalid("There must be at least one voter.".into()))?;
+        } else if self.voters.is_empty() {
+            Err(Error::ConfigInvalid(
+                "There must be at least one voter.".into(),
+            ))?;
         }
         Ok(())
+    }
+
+    fn has_quorum(&self, potential_quorum: &FxHashSet<u64>) -> bool {
+        self.voters.intersection(potential_quorum).count() >= majority(self.voters.len())
     }
 }
 
@@ -215,6 +221,15 @@ impl ConfigurationState {
             next.learners.remove(&id);
             next.voters.remove(&id);
         };
+    }
+
+    pub fn has_quorum(&self, potential_quorum: &FxHashSet<u64>) -> bool {
+        self.current.has_quorum(potential_quorum) && self
+            .next
+            .as_ref()
+            .map(|next| next.has_quorum(potential_quorum))
+            // If `next` is `None` we don't consider it, so just `true` it.
+            .unwrap_or(true)
     }
 }
 
@@ -453,8 +468,9 @@ impl ProgressSet {
     }
 
     /// Determine if a quorum is formed from the given set of nodes.
+    #[inline]
     pub fn has_quorum(&self, potential_quorum: &FxHashSet<u64>) -> bool {
-        potential_quorum.len() >= majority(self.voter_ids().len())
+        self.configuration.has_quorum(potential_quorum)
     }
 
     /// Enter a joint consensus state to transition to the specified configuration.
@@ -473,7 +489,12 @@ impl ProgressSet {
     pub fn transition_to_config(&mut self, next: Configuration) -> Result<(), Error> {
         next.valid()?;
         // Demotion check.
-        if let Some(&demoted) = self.configuration.voters().intersection(&next.learners).next() {
+        if let Some(&demoted) = self
+            .configuration
+            .voters()
+            .intersection(&next.learners)
+            .next()
+        {
             Err(Error::Exists(demoted, "learners"))?;
         }
         self.configuration.next = Some(next);
