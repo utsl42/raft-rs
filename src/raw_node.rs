@@ -312,6 +312,13 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
+            ConfChangeType::SetNodes => {
+                let config = cc.get_configuration();
+                let voters = config.get_nodes().iter().cloned();
+                let learners = config.get_learners().iter().cloned();
+                // TODO: Remove unwrap.
+                self.raft.set_nodes(voters, learners).unwrap()
+            }
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.prs().voter_ids().iter().cloned().collect());
