@@ -78,6 +78,20 @@ impl Configuration {
             learners: HashSet::with_capacity_and_hasher(learners, FxBuildHasher::default()),
         }
     }
+
+    // Validates that the configuration not problematic.
+    //
+    // Namely:
+    // * There can be no overlap of voters and learners.
+    // * There must be at least one voter.
+    pub fn valid(&self) -> Result<(), Error> {
+        if let Some(id) = self.voters.intersection(&self.learners).next() {
+            Err(Error::Exists(*id, "learners"))?;
+        } else if self.voters.len() == 0 {
+            Err(Error::ConfigInvalid("There must be at least one voter.".into()))?;
+        }
+        Ok(())
+    }
 }
 
 /// The status of an election according to a Candidate node.
@@ -150,7 +164,6 @@ impl ConfigurationState {
             None => self.current.learners.clone(),
         }
     }
-
     /// Promote a learner to a peer.
     pub fn promote_learner(&mut self, id: u64) -> Result<(), Error> {
         if !self.current.learners.remove(&id) {
@@ -187,7 +200,6 @@ impl ConfigurationState {
         } else if self.voters().contains(&id) {
             Err(Error::Exists(id, "voters"))?;
         }
-
         self.current.learners.insert(id);
         if let Some(ref mut next) = self.next {
             next.learners.insert(id);
@@ -445,9 +457,27 @@ impl ProgressSet {
         potential_quorum.len() >= majority(self.voter_ids().len())
     }
 
-    /// Enter a joint into the given configuration.
-    pub fn begin_joint(&mut self, config: Configuration) -> Result<(), Error> {
-        unimplemented!();
+    /// Enter a joint consensus state to transition to the specified configuration.
+    ///
+    /// Valid transitions:
+    /// * Non-existing -> Learner
+    /// * Non-existing -> Voter
+    /// * Learner -> Voter
+    /// * Learner -> Non-existing
+    /// * Voter -> Non-existing
+    ///
+    /// Errors:
+    /// * Voter -> Learner
+    /// * Member as voter and learner.
+    /// * Empty voter set.
+    pub fn transition_to_config(&mut self, next: Configuration) -> Result<(), Error> {
+        next.valid()?;
+        // Demotion check.
+        if let Some(&demoted) = self.configuration.voters().intersection(&next.learners).next() {
+            Err(Error::Exists(demoted, "learners"))?;
+        }
+        self.configuration.next = Some(next);
+        Ok(())
     }
 }
 
