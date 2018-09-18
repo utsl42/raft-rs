@@ -475,6 +475,13 @@ impl ProgressSet {
 
     /// Enter a joint consensus state to transition to the specified configuration.
     ///
+    /// The `next` provided should be derived from the `ConfChange` message.
+    ///
+    /// Once this state is entered the leader should replicate the `ConfChange` message. After the
+    /// majority of nodes, in both the current and the `next`, have committed the union state. At
+    /// this point the leader can call `commit_config_transition` and replicate a message
+    /// commiting the change.
+    ///
     /// Valid transitions:
     /// * Non-existing -> Learner
     /// * Non-existing -> Voter
@@ -486,7 +493,7 @@ impl ProgressSet {
     /// * Voter -> Learner
     /// * Member as voter and learner.
     /// * Empty voter set.
-    pub fn transition_to_config(&mut self, next: Configuration) -> Result<(), Error> {
+    pub fn begin_config_transition(&mut self, next: Configuration) -> Result<(), Error> {
         next.valid()?;
         // Demotion check.
         if let Some(&demoted) = self
@@ -498,6 +505,19 @@ impl ProgressSet {
             Err(Error::Exists(demoted, "learners"))?;
         }
         self.configuration.next = Some(next);
+        Ok(())
+    }
+
+    /// Finalizes the joint consensus state and transitions solely to the new state.
+    ///
+    /// This should be called only after calling `begin_config_transition` and the the majority
+    /// of nodes in both the `current` and the `next` state have commited the changes.
+    pub fn commit_config_transition(&mut self) -> Result<(), Error> {
+        let next = self.configuration.next.take();
+        match next {
+            None => Err(Error::NoPendingTransition)?,
+            Some(next) => self.configuration.current = next,
+        }
         Ok(())
     }
 }

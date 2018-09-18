@@ -1823,10 +1823,37 @@ impl<T: Storage> Raft<T> {
     /// Begin the process of changing the cluster's peer configuration to a new one.
     ///
     /// This should only be called on the leader.
-    pub fn set_nodes(&mut self, voters: impl IntoIterator<Item=u64>, learners: impl IntoIterator<Item=u64>) -> Result<()> {
+    ///
+    /// ```rust
+    /// use raft::{Raft, Config, storage::MemStorage};
+    /// let config = Config {
+    ///     id: 1,
+    ///     peers: vec![1],
+    ///     ..Default::default()
+    /// };
+    /// let mut raft: Raft<MemStorage> = Raft::new(&config, Default::default());
+    /// raft.become_candidate();
+    /// raft.become_leader();
+    /// raft.set_nodes(vec![1,2,3], vec![4]).unwrap_or_else(|e| {
+    ///     panic!("{}", e);
+    /// });
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// * `voters` and `learners` are not mutually exclusive.
+    /// * `voters` is empty.
+    pub fn set_nodes(
+        &mut self,
+        voters: impl IntoIterator<Item = u64>,
+        learners: impl IntoIterator<Item = u64>,
+    ) -> Result<()> {
+        if self.state != StateRole::Leader {
+            Err(Error::InvalidState(self.state))?;
+        }
         let config = Configuration::from((voters, learners));
         config.valid()?;
-        self.mut_prs().transition_to_config(config)?;
+        self.mut_prs().begin_config_transition(config)?;
         Ok(())
     }
 
