@@ -25,6 +25,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use eraftpb::ConfState;
 use errors::Error;
 use fxhash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::cmp;
@@ -67,6 +68,15 @@ where
         Self {
             voters: voters.into_iter().collect(),
             learners: learners.into_iter().collect(),
+        }
+    }
+}
+
+impl From<ConfState> for Configuration {
+    fn from(conf_state: ConfState) -> Self {
+        Self {
+            voters: conf_state.get_nodes().iter().cloned().collect(),
+            learners: conf_state.get_learners().iter().cloned().collect(),
         }
     }
 }
@@ -493,7 +503,8 @@ impl ProgressSet {
     /// * Voter -> Learner
     /// * Member as voter and learner.
     /// * Empty voter set.
-    pub fn begin_config_transition(&mut self, next: Configuration) -> Result<(), Error> {
+    pub fn begin_config_transition(&mut self, next: impl Into<Configuration>) -> Result<(), Error> {
+        let next = next.into();
         next.valid()?;
         // Demotion check.
         if let Some(&demoted) = self

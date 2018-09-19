@@ -59,6 +59,8 @@ enum MessageType {
     MsgReadIndexResp = 16;
     MsgRequestPreVote = 17;
     MsgRequestPreVoteResponse = 18;
+    MsgBeginSetNodes = 19;
+    MsgCommitSetNodes = 20;
 }
 
 message Message {
@@ -74,6 +76,7 @@ message Message {
     bool reject = 10;
     uint64 reject_hint = 11;
     bytes context = 12;
+    ConfState configuration = 13;
 }
 
 message HardState {
