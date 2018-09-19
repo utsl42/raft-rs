@@ -152,8 +152,7 @@ pub fn bench_progress_set_nodes(c: &mut Criterion) {
             let set = quick_progress_set(voters, learners);
             b.iter(|| {
                 let set = set.clone();
-                let agg = set.iter().all(|_| true);
-                agg
+                set.nodes()
             });
         }
     };
