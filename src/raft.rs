@@ -27,8 +27,11 @@
 
 use std::cmp;
 
-use eraftpb::{Entry, EntryType, HardState, Message, MessageType, Snapshot};
+use eraftpb::{
+    ConfChange, ConfChangeType, Entry, EntryType, HardState, Message, MessageType, Snapshot,
+};
 use fxhash::FxHashMap;
+use protobuf;
 use protobuf::RepeatedField;
 use rand::{self, Rng};
 
@@ -374,6 +377,7 @@ impl<T: Storage> Raft<T> {
 
     // send persists state to stable storage and then sends to its mailbox.
     fn send(&mut self, mut m: Message) {
+        debug!("Sending to ID {}: {:?}", m.get_to(), m);
         m.set_from(self.id);
         if m.get_msg_type() == MessageType::MsgRequestVote
             || m.get_msg_type() == MessageType::MsgRequestPreVote
@@ -618,7 +622,7 @@ impl<T: Storage> Raft<T> {
         self.maybe_commit();
     }
 
-    /// Returns true to indicate that there will probably be some readiness need to be handled.
+    ///maybe_commit Returns true to indicate that there will probably be some readiness need to be handled.
     pub fn tick(&mut self) -> bool {
         match self.state {
             StateRole::Follower | StateRole::PreCandidate | StateRole::Candidate => {
@@ -1315,6 +1319,29 @@ impl<T: Storage> Raft<T> {
                 let pr = prs.get_mut(m.get_from()).unwrap();
                 self.handle_transfer_leader(m, pr);
             }
+            MessageType::MsgBeginSetNodes => {
+                let configuration = m.get_configuration();
+                prs.begin_config_transition(configuration.clone()).unwrap();
+                // We send messages after beginning so we have the full node set.
+                let messages = prs
+                    .iter()
+                    .filter(|(&id, _)| {
+                        id != self.id
+                    })
+                    .map(|(id, _progress)| {
+                        let mut message = Message::new();
+                        message.set_msg_type(MessageType::MsgBeginSetNodes);
+                        message.set_configuration(configuration.clone());
+                        message.set_to(*id);
+                        message
+                    }).collect::<Vec<_>>();
+                for message in messages {
+                    self.send(message);
+                }
+            }
+            MessageType::MsgCommitSetNodes => {
+                prs.commit_config_transition().unwrap();
+            }
             _ => {}
         }
         self.set_prs(prs);
@@ -1427,24 +1454,7 @@ impl<T: Storage> Raft<T> {
                 }
                 return Ok(());
             }
-            MessageType::MsgBeginSetNodes | MessageType::MsgCommitSetNodes => {
-                unreachable!("The leader recieving a BeginSetNodes or CommitSetNodes message implies there are two leaders.");
-            }
-            MessageType::MsgHup
-            | MessageType::MsgAppend
-            | MessageType::MsgAppendResponse
-            | MessageType::MsgRequestVote
-            | MessageType::MsgSnapshot
-            | MessageType::MsgRequestVoteResponse
-            | MessageType::MsgHeartbeat
-            | MessageType::MsgHeartbeatResponse
-            | MessageType::MsgUnreachable
-            | MessageType::MsgSnapStatus
-            | MessageType::MsgTransferLeader
-            | MessageType::MsgTimeoutNow
-            | MessageType::MsgReadIndexResp
-            | MessageType::MsgRequestPreVote
-            | MessageType::MsgRequestPreVoteResponse => {}
+            _ => {}
         }
 
         let mut send_append = false;
@@ -1904,8 +1914,18 @@ impl<T: Storage> Raft<T> {
             Err(Error::InvalidState(self.state))?;
         }
         let config = Configuration::from((voters, learners));
+        debug!(
+            "Beginning set nodes with voters ({:?}), learners ({:?}).",
+            config.voters, config.learners
+        );
         config.valid()?;
-        self.mut_prs().begin_config_transition(config)?;
+        // Prep a configuration change to append.
+        let mut message = Message::new();
+        message.set_msg_type(MessageType::MsgBeginSetNodes);
+        message.set_from(self.id);
+        message.set_configuration(config.into());
+        // `append_entry` sets term, index for us.
+        self.step(message)?;
         Ok(())
     }
 

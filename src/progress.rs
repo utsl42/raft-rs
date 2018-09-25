@@ -55,8 +55,8 @@ impl Default for ProgressState {
 
 #[derive(Clone, Debug, Default)]
 pub struct Configuration {
-    voters: FxHashSet<u64>,
-    learners: FxHashSet<u64>,
+    pub voters: FxHashSet<u64>,
+    pub learners: FxHashSet<u64>,
 }
 
 impl<V, L> From<(V, L)> for Configuration
@@ -78,6 +78,15 @@ impl From<ConfState> for Configuration {
             voters: conf_state.get_nodes().iter().cloned().collect(),
             learners: conf_state.get_learners().iter().cloned().collect(),
         }
+    }
+}
+
+impl Into<ConfState> for Configuration {
+    fn into(self) -> ConfState {
+        let mut state = ConfState::new();
+        state.set_nodes(self.voters.iter().cloned().collect());
+        state.set_learners(self.learners.iter().cloned().collect());
+        state
     }
 }
 
@@ -341,14 +350,7 @@ impl ProgressSet {
 
     /// Adds a voter node
     pub fn insert_voter(&mut self, id: u64, pr: Progress) -> Result<(), Error> {
-        // If the progress exists already this is in error.
-        if self.progress.contains_key(&id) {
-            // Determine the correct error to return.
-            if self.learner_ids().contains(&id) {
-                return Err(Error::Exists(id, "learners"));
-            }
-            return Err(Error::Exists(id, "voters"));
-        }
+        debug!("Inserting voter with id {}.", id);
         self.configuration.insert_voter(id)?;
         self.progress.insert(id, pr);
         self.assert_progress_and_configuration_consistent();
@@ -357,14 +359,7 @@ impl ProgressSet {
 
     /// Adds a learner to the cluster
     pub fn insert_learner(&mut self, id: u64, pr: Progress) -> Result<(), Error> {
-        // If the progress exists already this is in error.
-        if self.progress.contains_key(&id) {
-            // Determine the correct error to return.
-            if self.learner_ids().contains(&id) {
-                return Err(Error::Exists(id, "learners"));
-            }
-            return Err(Error::Exists(id, "voters"));
-        }
+        debug!("Inserting learner with id {}.", id);
         self.configuration.insert_learner(id)?;
         self.progress.insert(id, pr);
         self.assert_progress_and_configuration_consistent();
@@ -373,6 +368,7 @@ impl ProgressSet {
 
     /// Removes the peer from the set of voters or learners.
     pub fn remove(&mut self, id: u64) -> Option<Progress> {
+        debug!("Removing peer with id {}.", id);
         self.configuration.remove(id);
         let removed = self.progress.remove(&id);
         self.assert_progress_and_configuration_consistent();
@@ -381,6 +377,7 @@ impl ProgressSet {
 
     /// Promote a learner to a peer.
     pub fn promote_learner(&mut self, id: u64) -> Result<(), Error> {
+        debug!("Promote learner with id {}.", id);
         self.configuration.promote_learner(id)?;
         self.assert_progress_and_configuration_consistent();
         Ok(())
@@ -483,6 +480,11 @@ impl ProgressSet {
         self.configuration.has_quorum(potential_quorum)
     }
 
+    /// Determine if the ProgressSet is represented by a transition state under Joint Consensus.
+    pub fn is_in_transition(&self) -> bool {
+        self.configuration.next.is_some()
+    }
+
     /// Enter a joint consensus state to transition to the specified configuration.
     ///
     /// The `next` provided should be derived from the `ConfChange` message.
@@ -505,6 +507,7 @@ impl ProgressSet {
     /// * Empty voter set.
     pub fn begin_config_transition(&mut self, next: impl Into<Configuration>) -> Result<(), Error> {
         let next = next.into();
+        debug!("Beginning member configuration transition. End state will be voters ({:?}), Learners: ({:?})", next.voters, next.learners);
         next.valid()?;
         // Demotion check.
         if let Some(&demoted) = self
@@ -515,7 +518,13 @@ impl ProgressSet {
         {
             Err(Error::Exists(demoted, "learners"))?;
         }
+        for id in next.voters.iter().chain(&next.learners) {
+            self.progress
+                .entry(*id)
+                .or_insert_with(|| Progress::default());
+        }
         self.configuration.next = Some(next);
+        // Now we create progresses for any that do not exist.
         Ok(())
     }
 
@@ -527,7 +536,10 @@ impl ProgressSet {
         let next = self.configuration.next.take();
         match next {
             None => Err(Error::NoPendingTransition)?,
-            Some(next) => self.configuration.current = next,
+            Some(next) => {
+                debug!("Commiting member configration transition. State is now voters ({:?}), Learners: ({:?})", next.voters, next.learners);
+                self.configuration.current = next;
+            }
         }
         Ok(())
     }

@@ -301,7 +301,8 @@ impl<T: Storage> RawNode<T> {
 
     /// Takes the conf change and applies it.
     pub fn apply_conf_change(&mut self, cc: &ConfChange) -> ConfState {
-        if cc.get_node_id() == INVALID_ID {
+        warn!("Got ConfChange");
+        if cc.get_node_id() == INVALID_ID && cc.get_change_type() != ConfChangeType::SetNodes {
             let mut cs = ConfState::new();
             cs.set_nodes(self.raft.prs().voter_ids().iter().cloned().collect());
             cs.set_learners(self.raft.prs().learner_ids().iter().cloned().collect());

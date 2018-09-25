@@ -60,7 +60,9 @@ enum MessageType {
     MsgRequestPreVote = 17;
     MsgRequestPreVoteResponse = 18;
     MsgBeginSetNodes = 19;
-    MsgCommitSetNodes = 20;
+    MsgBeginSetNodesResponse = 20;
+    MsgCommitSetNodes = 21;
+    MsgCommitSetNodesResponse = 22;
 }
 
 message Message {
