@@ -59,10 +59,6 @@ enum MessageType {
     MsgReadIndexResp = 16;
     MsgRequestPreVote = 17;
     MsgRequestPreVoteResponse = 18;
-    MsgBeginSetNodes = 19;
-    MsgBeginSetNodesResponse = 20;
-    MsgCommitSetNodes = 21;
-    MsgCommitSetNodesResponse = 22;
 }
 
 message Message {
@@ -78,7 +74,6 @@ message Message {
     bool reject = 10;
     uint64 reject_hint = 11;
     bytes context = 12;
-    ConfState configuration = 13;
 }
 
 message HardState {
@@ -96,7 +91,8 @@ enum ConfChangeType {
     AddNode    = 0;
     RemoveNode = 1;
     AddLearnerNode = 2;
-    SetNodes = 3;
+    BeginSetNodes = 3;
+    CommitSetNodes = 4;
 }
 
 message ConfChange {

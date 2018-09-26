@@ -59,21 +59,8 @@ pub struct Configuration {
     pub learners: FxHashSet<u64>,
 }
 
-impl<V, L> From<(V, L)> for Configuration
-where
-    V: IntoIterator<Item = u64>,
-    L: IntoIterator<Item = u64>,
-{
-    fn from((voters, learners): (V, L)) -> Self {
-        Self {
-            voters: voters.into_iter().collect(),
-            learners: learners.into_iter().collect(),
-        }
-    }
-}
-
-impl From<ConfState> for Configuration {
-    fn from(conf_state: ConfState) -> Self {
+impl<'a> From<&'a ConfState> for Configuration {
+    fn from(conf_state: &'a ConfState) -> Self {
         Self {
             voters: conf_state.get_nodes().iter().cloned().collect(),
             learners: conf_state.get_learners().iter().cloned().collect(),
@@ -519,9 +506,11 @@ impl ProgressSet {
             Err(Error::Exists(demoted, "learners"))?;
         }
         for id in next.voters.iter().chain(&next.learners) {
+            // TODO: Fill ins_size with correct value.
+            let new_progress = Progress::new(1, 10);
             self.progress
                 .entry(*id)
-                .or_insert_with(|| Progress::default());
+                .or_insert_with(|| new_progress);
         }
         self.configuration.next = Some(next);
         // Now we create progresses for any that do not exist.

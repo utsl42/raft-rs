@@ -16,7 +16,7 @@ use protobuf::{self, RepeatedField};
 use raft::{
     eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, Message, MessageType},
     storage::MemStorage,
-    Config, Raft, Result,
+    Config, Raft, Result, ProgressSet,
 };
 use test_util::{setup_for_test, Interface, Network};
 
@@ -42,6 +42,39 @@ fn new_unconnected_network(peers: impl IntoIterator<Item=u64>) -> Network {
     network
 }
 
+fn new_conf_change_message(voters: &Vec<u64>, learners: &Vec<u64>) -> Message {
+    let mut configuration = ConfState::new();
+    configuration.set_nodes(voters.clone());
+    configuration.set_learners(learners.clone());
+    let mut conf_change = ConfChange::new();
+    conf_change.set_change_type(ConfChangeType::BeginSetNodes);
+    conf_change.set_configuration(configuration);
+    let data = protobuf::Message::write_to_bytes(&conf_change).unwrap();
+    let mut entry = Entry::new();
+    entry.set_entry_type(EntryType::EntryConfChange);
+    entry.set_data(data);
+    entry.set_context(vec![]);
+    let mut message = Message::new();
+    message.set_msg_type(MessageType::MsgPropose);
+    message.set_entries(RepeatedField::from_vec(vec![entry]));
+    message
+}
+
+fn assert_membership(assert_voters: &Vec<u64>, assert_learners: &Vec<u64>, progress_set: &ProgressSet) {
+    let mut voters = progress_set.voter_ids()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    voters.sort();
+    let mut learners = progress_set.learner_ids()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    learners.sort();
+    assert_eq!(&voters, assert_voters);
+    assert_eq!(&learners, assert_learners);
+}
+
 #[test]
 fn test_one_node_to_cluster() -> Result<()> {
     setup_for_test();
@@ -52,41 +85,23 @@ fn test_one_node_to_cluster() -> Result<()> {
     network.peers.get_mut(&1).unwrap().become_leader();
 
     // Ensure the node has the intended initial configuration
-    assert_eq!(network.peers[&1]
-        .prs()
-        .voter_ids()
-        .len(), 1);
-    assert_eq!(network.peers[&1]
-        .prs()
-        .learner_ids()
-        .len(), 0);
+    assert_membership(&vec![1], &vec![], network.peers[&1].prs());
 
     // Send the message to start the joint.
-    network.peers.get_mut(&1).unwrap().set_nodes(expected_voters.clone(), expected_learners.clone())?;
+    let message = new_conf_change_message(&expected_voters, &expected_learners);
+    network.peers.get_mut(&1).unwrap().step(message)?;
 
-    let mut voters = network.peers[&1]
-        .prs()
-        .voter_ids()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    voters.sort();
-    let mut learners = network.peers[&1]
-        .prs()
-        .learner_ids()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    learners.sort();
-    assert_eq!(&voters, &expected_voters);
-    assert_eq!(&learners, &expected_learners);
-    assert_eq!(network.peers.get(&1).unwrap().prs().is_in_transition(), true, "Should be in transition.");
+    assert_eq!(network.peers.get(&1).unwrap().prs().is_in_transition(), true, "Peer 1 should be in transition.");
+    assert_membership(&expected_voters, &expected_learners, network.peers[&1].prs());
 
     // Replicate the configuration change.
     let messages = network.peers.get_mut(&1).unwrap().read_messages();
-    println!("Should have begin {:?}", messages);
     // This will carry out all related responses as well.
     network.send(messages);
+
+    for id in 1..=4 {
+        assert_eq!(network.peers.get(&id).unwrap().prs().is_in_transition(), true, "Peer {} should be in transition.", id);
+    }
 
     // Now the leader should be prepared to commit.
     let messages = network.peers.get_mut(&1).unwrap().read_messages();

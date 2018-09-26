@@ -508,6 +508,7 @@ impl<T: Storage> Raft<T> {
         if pr.is_paused() {
             return;
         }
+        println!("{:?}, {:?}", to, pr);
         let term = self.raft_log.term(pr.next_idx - 1);
         let ents = self.raft_log.entries(pr.next_idx, self.max_msg_size);
         let mut m = Message::new();
@@ -1319,29 +1320,6 @@ impl<T: Storage> Raft<T> {
                 let pr = prs.get_mut(m.get_from()).unwrap();
                 self.handle_transfer_leader(m, pr);
             }
-            MessageType::MsgBeginSetNodes => {
-                let configuration = m.get_configuration();
-                prs.begin_config_transition(configuration.clone()).unwrap();
-                // We send messages after beginning so we have the full node set.
-                let messages = prs
-                    .iter()
-                    .filter(|(&id, _)| {
-                        id != self.id
-                    })
-                    .map(|(id, _progress)| {
-                        let mut message = Message::new();
-                        message.set_msg_type(MessageType::MsgBeginSetNodes);
-                        message.set_configuration(configuration.clone());
-                        message.set_to(*id);
-                        message
-                    }).collect::<Vec<_>>();
-                for message in messages {
-                    self.send(message);
-                }
-            }
-            MessageType::MsgCommitSetNodes => {
-                prs.commit_config_transition().unwrap();
-            }
             _ => {}
         }
         self.set_prs(prs);
@@ -1388,6 +1366,7 @@ impl<T: Storage> Raft<T> {
 
                 for (i, e) in m.mut_entries().iter_mut().enumerate() {
                     if e.get_entry_type() == EntryType::EntryConfChange {
+                        // TODO: This could be very dangerous with set_nodes.
                         if self.has_pending_conf() {
                             info!(
                                 "propose conf {:?} ignored since pending unapplied \
@@ -1398,6 +1377,13 @@ impl<T: Storage> Raft<T> {
                             e.set_entry_type(EntryType::EntryNormal);
                         } else {
                             self.pending_conf_index = self.raft_log.last_index() + i as u64 + 1;
+                        }
+                        // If the change is a `SetNodes` we need to apply the change right away.
+                        let conf_change: ConfChange = protobuf::parse_from_bytes(e.get_data()).unwrap();
+                        if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
+                            let configuration = conf_change.get_configuration();
+                            self.mut_prs().begin_config_transition(configuration).unwrap();
+
                         }
                     }
                 }
@@ -1568,25 +1554,7 @@ impl<T: Storage> Raft<T> {
                 self.state,
                 m.get_from()
             ),
-            MessageType::MsgBeginSetNodes => {
-                let configuration = m.take_configuration();
-                self.mut_prs().begin_config_transition(configuration)?;
-            }
-            MessageType::MsgCommitSetNodes => {
-                self.mut_prs().commit_config_transition()?;
-            }
-            MessageType::MsgHup
-            | MessageType::MsgBeat
-            | MessageType::MsgAppendResponse
-            | MessageType::MsgRequestVote
-            | MessageType::MsgHeartbeatResponse
-            | MessageType::MsgUnreachable
-            | MessageType::MsgSnapStatus
-            | MessageType::MsgCheckQuorum
-            | MessageType::MsgTransferLeader
-            | MessageType::MsgReadIndex
-            | MessageType::MsgReadIndexResp
-            | MessageType::MsgRequestPreVote => {}
+            _ => {}
         }
         Ok(())
     }
@@ -1678,24 +1646,7 @@ impl<T: Storage> Raft<T> {
                 };
                 self.read_states.push(rs);
             }
-            MessageType::MsgBeginSetNodes => {
-                let configuration = m.take_configuration();
-                self.mut_prs().begin_config_transition(configuration)?;
-            }
-            MessageType::MsgCommitSetNodes => {
-                self.mut_prs().commit_config_transition()?;
-            }
-            MessageType::MsgHup
-            | MessageType::MsgBeat
-            | MessageType::MsgAppendResponse
-            | MessageType::MsgRequestVote
-            | MessageType::MsgRequestVoteResponse
-            | MessageType::MsgHeartbeatResponse
-            | MessageType::MsgUnreachable
-            | MessageType::MsgSnapStatus
-            | MessageType::MsgCheckQuorum
-            | MessageType::MsgRequestPreVote
-            | MessageType::MsgRequestPreVoteResponse => {}
+            _ => {}
         }
         Ok(())
     }
@@ -1741,6 +1692,31 @@ impl<T: Storage> Raft<T> {
                 self.send(to_send);
             }
         }
+    }
+
+    fn handle_commit_set_nodes(&mut self, m: &Message) {
+        self.mut_prs().commit_config_transition().unwrap();
+    }
+
+    fn handle_begin_set_nodes(&mut self, m: &Message) {
+        unimplemented!()
+        // assert!(m.get_entries().len() != 0, "BeginSetNodes should have an entry");
+        // // All nodes immediately apply the new configuration.
+        // let configuration = m.get_entries().iter().find(|entry| entry
+        // get_configuration();
+        // self.mut_prs().begin_config_transition(configuration.clone()).unwrap();
+        // match self.state {
+        //     // The leader distributes the messages to the peers.
+        //     StateRole::Leader => {
+        //         let mut entries = (*m.get_entries()).iter().cloned().collect::<Vec<_>>();
+        //         println!("{:?}", entries);
+        //         self.append_entry(&mut entries[..]);
+        //         self.bcast_append();
+        //     },
+        //     _ => {
+        //         let mut message = Message::new();
+        //     }
+        // }
     }
 
     // TODO: revoke pub when there is a better way to test.
@@ -1907,23 +1883,26 @@ impl<T: Storage> Raft<T> {
     /// * `voters` is empty.
     pub fn set_nodes(
         &mut self,
-        voters: impl IntoIterator<Item = u64>,
-        learners: impl IntoIterator<Item = u64>,
+        conf_change: &ConfChange,
     ) -> Result<()> {
         if self.state != StateRole::Leader {
             Err(Error::InvalidState(self.state))?;
         }
-        let config = Configuration::from((voters, learners));
+        let config = Configuration::from(conf_change.get_configuration());
         debug!(
             "Beginning set nodes with voters ({:?}), learners ({:?}).",
             config.voters, config.learners
         );
         config.valid()?;
         // Prep a configuration change to append.
+        let data = protobuf::Message::write_to_bytes(conf_change)?;
+        let mut entry = Entry::new();
+        entry.set_entry_type(EntryType::EntryConfChange);
+        entry.set_data(data);
         let mut message = Message::new();
-        message.set_msg_type(MessageType::MsgBeginSetNodes);
+        message.set_msg_type(MessageType::MsgPropose);
         message.set_from(self.id);
-        message.set_configuration(config.into());
+    	message.set_entries(RepeatedField::from_vec(vec![entry]));
         // `append_entry` sets term, index for us.
         self.step(message)?;
         Ok(())
