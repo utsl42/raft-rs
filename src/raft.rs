@@ -377,7 +377,7 @@ impl<T: Storage> Raft<T> {
 
     // send persists state to stable storage and then sends to its mailbox.
     fn send(&mut self, mut m: Message) {
-        debug!("Sending to ID {}: {:?}", m.get_to(), m);
+        debug!("Sending from {} to {}: {:?}", self.id, m.get_to(), m);
         m.set_from(self.id);
         if m.get_msg_type() == MessageType::MsgRequestVote
             || m.get_msg_type() == MessageType::MsgRequestPreVote
@@ -574,7 +574,7 @@ impl<T: Storage> Raft<T> {
     /// changed (in which case the caller should call `r.bcast_append`).
     pub fn maybe_commit(&mut self) -> bool {
         let mci = self.prs().minimum_committed_index();
-        self.raft_log.maybe_commit(mci, self.term)
+        let commited = self.raft_log.maybe_commit(mci, self.term);
     }
 
     /// Resets the current node to a given term.
@@ -1052,6 +1052,9 @@ impl<T: Storage> Raft<T> {
 
     #[inline(always)]
     fn maybe_handle_set_nodes(&mut self, m: &Message) -> Result<()> {
+        // TODO: Check if this should be rejected for normal reasons.
+        
+
         // This codepath will be checked often, so keep it fast.
         if let Some(entry) = m.get_entries().first() {
             if entry.get_entry_type() == EntryType::EntryConfChange {
@@ -1065,6 +1068,7 @@ impl<T: Storage> Raft<T> {
                         let mut entries = Vec::from(m.get_entries());
                         self.append_entry(&mut entries);
                         self.bcast_append();
+                        self.pending_conf_index = self.raft_log.last_index();
                     }
                 }
             }
@@ -1716,31 +1720,6 @@ impl<T: Storage> Raft<T> {
                 self.send(to_send);
             }
         }
-    }
-
-    fn handle_commit_set_nodes(&mut self, m: &Message) {
-        self.mut_prs().commit_config_transition().unwrap();
-    }
-
-    fn handle_begin_set_nodes(&mut self, m: &Message) {
-        unimplemented!()
-        // assert!(m.get_entries().len() != 0, "BeginSetNodes should have an entry");
-        // // All nodes immediately apply the new configuration.
-        // let configuration = m.get_entries().iter().find(|entry| entry
-        // get_configuration();
-        // self.mut_prs().begin_config_transition(configuration.clone()).unwrap();
-        // match self.state {
-        //     // The leader distributes the messages to the peers.
-        //     StateRole::Leader => {
-        //         let mut entries = (*m.get_entries()).iter().cloned().collect::<Vec<_>>();
-        //         println!("{:?}", entries);
-        //         self.append_entry(&mut entries[..]);
-        //         self.bcast_append();
-        //     },
-        //     _ => {
-        //         let mut message = Message::new();
-        //     }
-        // }
     }
 
     // TODO: revoke pub when there is a better way to test.

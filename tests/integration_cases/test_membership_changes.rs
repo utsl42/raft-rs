@@ -20,10 +20,10 @@ use raft::{
 };
 use test_util::{setup_for_test, Interface, Network};
 
-fn new_unconnected_network(peers: impl IntoIterator<Item=u64>) -> Network {
-    let mut peers = peers.into_iter();
-    let init = peers.next().unwrap();
-    let peers = peers.collect::<Vec<_>>();
+fn new_unconnected_network(voters: impl IntoIterator<Item=u64>, learners: impl IntoIterator<Item=u64>) -> Network {
+    let mut voters = voters.into_iter();
+    let init = voters.next().unwrap();
+    let voters = voters.collect::<Vec<_>>();
 
     let mut network = Network::new(vec![Some(Interface::new(Raft::new(&Config {
         id: init,
@@ -31,7 +31,7 @@ fn new_unconnected_network(peers: impl IntoIterator<Item=u64>) -> Network {
         ..Default::default()
     }, MemStorage::new())))]);
 
-    for &id in peers.iter() {
+    for &id in voters.iter() {
         let config = Config {
             id,
             peers: vec![id],
@@ -39,6 +39,16 @@ fn new_unconnected_network(peers: impl IntoIterator<Item=u64>) -> Network {
         };
         network.peers.insert(id, Interface::new(Raft::new(&config, MemStorage::new())));
     }
+
+    for id in learners.into_iter() {
+        let config = Config {
+            id,
+            learners: vec![id],
+            ..Default::default()
+        };
+        network.peers.insert(id, Interface::new(Raft::new(&config, MemStorage::new())));
+    }
+
     network
 }
 
@@ -80,12 +90,13 @@ fn test_one_node_to_cluster() -> Result<()> {
     setup_for_test();
     let expected_voters = vec![1, 2, 3];
     let expected_learners = vec![4];
-    let mut network = new_unconnected_network(vec![1, 2, 3, 4]);
+    let mut network = new_unconnected_network(vec![1, 2, 3], vec![4]);
     network.peers.get_mut(&1).unwrap().become_candidate();
     network.peers.get_mut(&1).unwrap().become_leader();
 
     // Ensure the node has the intended initial configuration
-    (1..=4).for_each(|id| assert_membership(&vec![id], &vec![], network.peers[&id].prs()));
+    (1..=3).for_each(|id| assert_membership(&vec![id], &vec![], network.peers[&id].prs()));
+    assert_membership(&vec![], &vec![4], network.peers[&4].prs());
 
     // Send the message to start the joint.
     let mut configuration = ConfState::new();

@@ -494,7 +494,6 @@ impl ProgressSet {
     /// * Empty voter set.
     pub fn begin_config_transition(&mut self, next: impl Into<Configuration>) -> Result<(), Error> {
         let next = next.into();
-        debug!("Beginning member configuration transition. End state will be voters ({:?}), Learners: ({:?})", next.voters, next.learners);
         next.valid()?;
         // Demotion check.
         if let Some(&demoted) = self
@@ -505,6 +504,7 @@ impl ProgressSet {
         {
             Err(Error::Exists(demoted, "learners"))?;
         }
+        debug!("Beginning member configuration transition. End state will be voters ({:?}), Learners: ({:?})", next.voters, next.learners);
         for id in next.voters.iter().chain(&next.learners) {
             // TODO: Fill ins_size with correct value.
             let new_progress = Progress::new(1, 10);
