@@ -504,7 +504,7 @@ impl ProgressSet {
         {
             Err(Error::Exists(demoted, "learners"))?;
         }
-        debug!("Beginning member configuration transition. End state will be voters ({:?}), Learners: ({:?})", next.voters, next.learners);
+        debug!("Beginning member configuration transition. End state will be voters {:?}, Learners: {:?}", next.voters, next.learners);
         for id in next.voters.iter().chain(&next.learners) {
             // TODO: Fill ins_size with correct value.
             let new_progress = Progress::new(1, 10);
@@ -526,7 +526,7 @@ impl ProgressSet {
         match next {
             None => Err(Error::NoPendingTransition)?,
             Some(next) => {
-                debug!("Commiting member configration transition. State is now voters ({:?}), Learners: ({:?})", next.voters, next.learners);
+                debug!("Commiting member configration transition. State is now voters {:?}, Learners: {:?}", next.voters, next.learners);
                 self.configuration.current = next;
             }
         }

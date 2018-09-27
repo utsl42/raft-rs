@@ -145,6 +145,10 @@ pub struct Raft<T: Storage> {
     /// value.
     pub pending_conf_index: u64,
 
+    /// The last BeginSetNodes entry. Once we commit this entry we can exit the joint state.
+    //TODO: Ensure this is initialized like `pending_conf_index`, also attempt to merge them.
+    began_set_nodes_at: Option<u64>,
+
     /// The queue of read-only requests.
     pub read_only: ReadOnly,
 
@@ -249,6 +253,7 @@ impl<T: Storage> Raft<T> {
             term: Default::default(),
             election_elapsed: Default::default(),
             pending_conf_index: Default::default(),
+            began_set_nodes_at: Default::default(),
             vote: Default::default(),
             heartbeat_elapsed: Default::default(),
             randomized_election_timeout: 0,
@@ -508,7 +513,6 @@ impl<T: Storage> Raft<T> {
         if pr.is_paused() {
             return;
         }
-        println!("{:?}, {:?}", to, pr);
         let term = self.raft_log.term(pr.next_idx - 1);
         let ents = self.raft_log.entries(pr.next_idx, self.max_msg_size);
         let mut m = Message::new();
@@ -574,7 +578,29 @@ impl<T: Storage> Raft<T> {
     /// changed (in which case the caller should call `r.bcast_append`).
     pub fn maybe_commit(&mut self) -> bool {
         let mci = self.prs().minimum_committed_index();
-        let commited = self.raft_log.maybe_commit(mci, self.term);
+        if let Some(index) = self.began_set_nodes_at {
+            if mci >= index {
+                self.began_set_nodes_at = None;
+                // We changed the config already in handle_set_nodes.
+                if self.state == StateRole::Leader {
+                    // We must replicate the commit entry.
+                    self.mut_prs().commit_config_transition().unwrap();
+                    self.append_commit_set_nodes();
+                }
+            }
+        }
+        self.raft_log.maybe_commit(mci, self.term)
+    }
+
+    fn append_commit_set_nodes(&mut self) {
+        let mut conf_change = ConfChange::new();
+        conf_change.set_change_type(ConfChangeType::CommitSetNodes);
+        let data = protobuf::Message::write_to_bytes(&conf_change).unwrap();
+        let mut entry = Entry::new();
+        entry.set_entry_type(EntryType::EntryConfChange);
+        entry.set_data(data);
+        self.append_entry(&mut [entry]);
+        self.bcast_append();
     }
 
     /// Resets the current node to a given term.
@@ -1041,6 +1067,17 @@ impl<T: Storage> Raft<T> {
                     StateRole::Leader => self.step_leader(m)?,
                 }
             }
+            MessageType::MsgPropose => {
+                // TODO: Make sure the leader only assumes this state when it begins replicating the log.
+                self.maybe_handle_set_nodes(&m)?;
+                // Otherwise proceed as normal.
+                match self.state {
+                    StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
+                    StateRole::Follower => self.step_follower(m)?,
+                    StateRole::Leader => self.step_leader(m)?,
+                }
+
+            },
             _ => match self.state {
                 StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
                 StateRole::Follower => self.step_follower(m)?,
@@ -1053,7 +1090,7 @@ impl<T: Storage> Raft<T> {
     #[inline(always)]
     fn maybe_handle_set_nodes(&mut self, m: &Message) -> Result<()> {
         // TODO: Check if this should be rejected for normal reasons.
-        
+        // Notably, if another is happening now.
 
         // This codepath will be checked often, so keep it fast.
         if let Some(entry) = m.get_entries().first() {
@@ -1062,14 +1099,19 @@ impl<T: Storage> Raft<T> {
                 let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
 
                 if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
+                    warn!("Got begin set nodes on {}, idx {}", self.id, entry.get_index());
                     let configuration = conf_change.get_configuration();
+                    self.began_set_nodes_at = Some(self.raft_log.last_index() + 1);
                     self.mut_prs().begin_config_transition(configuration)?;
-                    if self.state == StateRole::Leader {
-                        let mut entries = Vec::from(m.get_entries());
-                        self.append_entry(&mut entries);
-                        self.bcast_append();
-                        self.pending_conf_index = self.raft_log.last_index();
-                    }
+                    // if self.state == StateRole::Leader {
+                    //     let mut entries = Vec::from(m.get_entries());
+                    //     self.append_entry(&mut entries);
+                    //     self.bcast_append();
+                    //     self.pending_conf_index = self.raft_log.last_index();
+                    // }
+                } else if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
+                    warn!("Got commit set nodes on {}", self.id);
+                    self.mut_prs().commit_config_transition()?;
                 }
             }
         }
@@ -1683,6 +1725,7 @@ impl<T: Storage> Raft<T> {
     /// For a given message, append the entries to the log.
     pub fn handle_append_entries(&mut self, m: &Message) {
         if m.get_index() < self.raft_log.committed {
+            debug!("Got message with lower index than committed.");
             let mut to_send = Message::new();
             to_send.set_to(m.get_from());
             to_send.set_msg_type(MessageType::MsgAppendResponse);
@@ -1906,8 +1949,9 @@ impl<T: Storage> Raft<T> {
         entry.set_entry_type(EntryType::EntryConfChange);
         entry.set_data(data);
         let mut message = Message::new();
-        message.set_msg_type(MessageType::MsgAppend);
+        message.set_msg_type(MessageType::MsgPropose);
         message.set_from(self.id);
+        message.set_index(self.raft_log.last_index() + 1);
     	message.set_entries(RepeatedField::from_vec(vec![entry]));
         // `append_entry` sets term, index for us.
         self.step(message)?;

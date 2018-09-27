@@ -52,22 +52,16 @@ fn new_unconnected_network(voters: impl IntoIterator<Item=u64>, learners: impl I
     network
 }
 
-fn new_conf_change_message(voters: &Vec<u64>, learners: &Vec<u64>) -> Message {
-    let mut configuration = ConfState::new();
-    configuration.set_nodes(voters.clone());
-    configuration.set_learners(learners.clone());
-    let mut conf_change = ConfChange::new();
-    conf_change.set_change_type(ConfChangeType::BeginSetNodes);
-    conf_change.set_configuration(configuration);
-    let data = protobuf::Message::write_to_bytes(&conf_change).unwrap();
-    let mut entry = Entry::new();
-    entry.set_entry_type(EntryType::EntryConfChange);
-    entry.set_data(data);
-    entry.set_context(vec![]);
-    let mut message = Message::new();
-    message.set_msg_type(MessageType::MsgSetNodes);
-    message.set_entries(RepeatedField::from_vec(vec![entry]));
-    message
+fn process(network: &mut Network, messages: Vec<Message>) -> Vec<Message> {
+    let mut responses = vec![];
+    for message in messages {
+        let id = message.get_to();
+        // Append
+        let peer = network.peers.get_mut(&id).unwrap();
+        peer.step(message);
+        responses.append(&mut peer.read_messages());
+    }
+    responses
 }
 
 fn assert_membership(assert_voters: &Vec<u64>, assert_learners: &Vec<u64>, progress_set: &ProgressSet) {
@@ -98,31 +92,58 @@ fn test_one_node_to_cluster() -> Result<()> {
     (1..=3).for_each(|id| assert_membership(&vec![id], &vec![], network.peers[&id].prs()));
     assert_membership(&vec![], &vec![4], network.peers[&4].prs());
 
+    let messages = network.peers.get_mut(&1).unwrap().read_messages();
+    assert!(messages.is_empty());
+    network.send(messages);
+
     // Send the message to start the joint.
     let mut configuration = ConfState::new();
     configuration.set_nodes(expected_voters.clone());
     configuration.set_learners(expected_learners.clone());
     network.peers.get_mut(&1).unwrap().set_nodes(&configuration);
-    // let message = new_conf_change_message(&expected_voters, &expected_learners);
-    // network.peers.get_mut(&1).unwrap().step(message)?;
 
     assert_eq!(network.peers.get(&1).unwrap().prs().is_in_transition(), true, "Peer 1 should be in transition.");
     assert_membership(&expected_voters, &expected_learners, network.peers[&1].prs());
 
     // Replicate the configuration change.
     let messages = network.peers.get_mut(&1).unwrap().read_messages();
-    // This will carry out all related responses as well.
-    network.send(messages);
+
+    warn!("Initialize peers phase.");
+    assert!(messages.iter().all(|m| m.get_msg_type() == MessageType::MsgAppend));
+    assert_eq!(messages.len(), 3, "Should have 3 Append messages to send");
+    let messages = process(&mut network, messages);
+
+    warn!("Initializer append responses phase.");
+    assert!(messages.iter().all(|m| m.get_msg_type() == MessageType::MsgAppendResponse));
+    assert_eq!(messages.len(), 3, "Should have 3 AppendResponse messages to send");
+    let messages = process(&mut network, messages);
+
+    warn!("Append for BeginSetNodes phase.");
+    assert!(messages.iter().all(|m| m.get_msg_type() == MessageType::MsgAppend));
+    assert_eq!(messages.len(), 3, "Should have 3 Append messages to send");
+    let messages = process(&mut network, messages);
 
     for id in 1..=4 {
         assert_eq!(network.peers.get(&id).unwrap().prs().is_in_transition(), true, "Peer {} should be in transition.", id);
+        assert_eq!(network.peers.get(&id).unwrap().raft_log.committed, 1);
     }
 
-    // Now the leader should be prepared to commit.
-    let messages = network.peers.get_mut(&1).unwrap().read_messages();
-    println!("Should have commit {:?}", messages);
+    warn!("AppendResponse for BeginSetNodes phase.");
+    assert!(messages.iter().all(|m| m.get_msg_type() == MessageType::MsgAppendResponse));
+    assert_eq!(messages.len(), 3, "Should have 3 AppendResponse messages to send");
+    let messages = process(&mut network, messages);
 
-    assert_eq!(network.peers.get(&1).unwrap().prs().is_in_transition(), false, "Should have proceeded through transition.");
+    assert_eq!(network.peers.get(&1).unwrap().raft_log.committed, 2);
+
+    warn!("Append for CommitSetNodes phase.");
+    assert!(messages.iter().all(|m| m.get_msg_type() == MessageType::MsgAppend));
+    assert_eq!(messages.len(), 3, "Should have 3 Append messages to send");
+    let messages = process(&mut network, messages);
+
+    for id in 1..=4 {
+        assert_eq!(network.peers.get(&id).unwrap().raft_log.committed, 2);
+        assert_eq!(network.peers.get(&id).unwrap().prs().is_in_transition(), false, "Peer {} should have proceeded through transition.", id);
+    }
 
     Ok(())
 }

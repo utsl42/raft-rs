@@ -2730,7 +2730,7 @@ fn test_restore() {
     );
     assert_eq!(
         sm.prs().voter_ids(),
-        &s.get_metadata()
+        s.get_metadata()
             .get_conf_state()
             .get_nodes()
             .iter()
@@ -2945,7 +2945,7 @@ fn test_add_node() {
     r.add_node(2);
     assert_eq!(
         r.prs().voter_ids(),
-        &vec![1, 2].into_iter().collect::<FxHashSet<_>>()
+        vec![1, 2].into_iter().collect::<FxHashSet<_>>()
     );
 }
 
@@ -3022,7 +3022,7 @@ fn test_raft_nodes() {
         let r = new_test_raft(1, ids, 10, 1, new_storage());
         let voter_ids = r.prs().voter_ids();
         let wids = wids.into_iter().collect::<FxHashSet<_>>();
-        if voter_ids != &wids {
+        if voter_ids != wids {
             panic!("#{}: nodes = {:?}, want {:?}", i, voter_ids, wids);
         }
     }
