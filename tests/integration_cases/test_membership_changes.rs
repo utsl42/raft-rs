@@ -55,7 +55,7 @@ fn new_conf_change_message(voters: &Vec<u64>, learners: &Vec<u64>) -> Message {
     entry.set_data(data);
     entry.set_context(vec![]);
     let mut message = Message::new();
-    message.set_msg_type(MessageType::MsgPropose);
+    message.set_msg_type(MessageType::MsgSetNodes);
     message.set_entries(RepeatedField::from_vec(vec![entry]));
     message
 }
@@ -85,11 +85,15 @@ fn test_one_node_to_cluster() -> Result<()> {
     network.peers.get_mut(&1).unwrap().become_leader();
 
     // Ensure the node has the intended initial configuration
-    assert_membership(&vec![1], &vec![], network.peers[&1].prs());
+    (1..=4).for_each(|id| assert_membership(&vec![id], &vec![], network.peers[&id].prs()));
 
     // Send the message to start the joint.
-    let message = new_conf_change_message(&expected_voters, &expected_learners);
-    network.peers.get_mut(&1).unwrap().step(message)?;
+    let mut configuration = ConfState::new();
+    configuration.set_nodes(expected_voters.clone());
+    configuration.set_learners(expected_learners.clone());
+    network.peers.get_mut(&1).unwrap().set_nodes(&configuration);
+    // let message = new_conf_change_message(&expected_voters, &expected_learners);
+    // network.peers.get_mut(&1).unwrap().step(message)?;
 
     assert_eq!(network.peers.get(&1).unwrap().prs().is_in_transition(), true, "Peer 1 should be in transition.");
     assert_membership(&expected_voters, &expected_learners, network.peers[&1].prs());

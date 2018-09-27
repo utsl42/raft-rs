@@ -28,7 +28,7 @@
 use std::cmp;
 
 use eraftpb::{
-    ConfChange, ConfChangeType, Entry, EntryType, HardState, Message, MessageType, Snapshot,
+    ConfChange, ConfChangeType, Entry, EntryType, HardState, Message, MessageType, Snapshot, ConfState,
 };
 use fxhash::FxHashMap;
 use protobuf;
@@ -1031,6 +1031,16 @@ impl<T: Storage> Raft<T> {
                     self.send(to_send);
                 }
             }
+            // Set Nodes calls, part of Joint Consensus, require the node to act on an entry as soon as it sees it, instead of at commit time. Since they are replicated by append, we must check here.
+            MessageType::MsgAppend => {
+                self.maybe_handle_set_nodes(&m)?;
+                // Otherwise proceed as normal.
+                match self.state {
+                    StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
+                    StateRole::Follower => self.step_follower(m)?,
+                    StateRole::Leader => self.step_leader(m)?,
+                }
+            }
             _ => match self.state {
                 StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
                 StateRole::Follower => self.step_follower(m)?,
@@ -1038,6 +1048,28 @@ impl<T: Storage> Raft<T> {
             },
         }
 
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn maybe_handle_set_nodes(&mut self, m: &Message) -> Result<()> {
+        // This codepath will be checked often, so keep it fast.
+        if let Some(entry) = m.get_entries().first() {
+            if entry.get_entry_type() == EntryType::EntryConfChange {
+                // If the change is a `SetNodes` we need to apply the change right away.
+                let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+
+                if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
+                    let configuration = conf_change.get_configuration();
+                    self.mut_prs().begin_config_transition(configuration)?;
+                    if self.state == StateRole::Leader {
+                        let mut entries = Vec::from(m.get_entries());
+                        self.append_entry(&mut entries);
+                        self.bcast_append();
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1377,13 +1409,6 @@ impl<T: Storage> Raft<T> {
                             e.set_entry_type(EntryType::EntryNormal);
                         } else {
                             self.pending_conf_index = self.raft_log.last_index() + i as u64 + 1;
-                        }
-                        // If the change is a `SetNodes` we need to apply the change right away.
-                        let conf_change: ConfChange = protobuf::parse_from_bytes(e.get_data()).unwrap();
-                        if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
-                            let configuration = conf_change.get_configuration();
-                            self.mut_prs().begin_config_transition(configuration).unwrap();
-
                         }
                     }
                 }
@@ -1883,24 +1908,27 @@ impl<T: Storage> Raft<T> {
     /// * `voters` is empty.
     pub fn set_nodes(
         &mut self,
-        conf_change: &ConfChange,
+        conf_state: &ConfState,
     ) -> Result<()> {
         if self.state != StateRole::Leader {
             Err(Error::InvalidState(self.state))?;
         }
-        let config = Configuration::from(conf_change.get_configuration());
+        let config = Configuration::from(conf_state);
+        config.valid()?;
         debug!(
-            "Beginning set nodes with voters ({:?}), learners ({:?}).",
+            "Replicating SetNodes with voters ({:?}), learners ({:?}).",
             config.voters, config.learners
         );
-        config.valid()?;
         // Prep a configuration change to append.
-        let data = protobuf::Message::write_to_bytes(conf_change)?;
+        let mut conf_change = ConfChange::new();
+        conf_change.set_change_type(ConfChangeType::BeginSetNodes);
+        conf_change.set_configuration((*conf_state).clone());
+        let data = protobuf::Message::write_to_bytes(&conf_change)?;
         let mut entry = Entry::new();
         entry.set_entry_type(EntryType::EntryConfChange);
         entry.set_data(data);
         let mut message = Message::new();
-        message.set_msg_type(MessageType::MsgPropose);
+        message.set_msg_type(MessageType::MsgAppend);
         message.set_from(self.id);
     	message.set_entries(RepeatedField::from_vec(vec![entry]));
         // `append_entry` sets term, index for us.

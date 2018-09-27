@@ -313,7 +313,7 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
-            ConfChangeType::BeginSetNodes => self.raft.set_nodes(&cc).unwrap(),
+            ConfChangeType::BeginSetNodes => self.raft.set_nodes(cc.get_configuration()).unwrap(),
             ConfChangeType::CommitSetNodes => unreachable!("CommitSetNodes should occur in the cluster"),
         }
         let mut cs = ConfState::new();
