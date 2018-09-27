@@ -1047,7 +1047,6 @@ impl<T: Storage> Raft<T> {
                 StateRole::Leader => self.step_leader(m)?,
             },
         }
-
         Ok(())
     }
 
