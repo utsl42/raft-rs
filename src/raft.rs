@@ -810,7 +810,7 @@ impl<T: Storage> Raft<T> {
             self.id, vote_msg, self_id, self.term
         );
         self.poll(self_id, acceptance);
-        if let CandidacyStatus::Elected = self.prs().candidacy_status(self.id, &self.votes) {
+        if let CandidacyStatus::Elected = self.prs().candidacy_status(&self.votes) {
             // We won the election after voting for ourselves (which must mean that
             // this is a single-node cluster). Advance to the next state.
             if campaign_type == CAMPAIGN_PRE_ELECTION {
@@ -1599,7 +1599,7 @@ impl<T: Storage> Raft<T> {
                     self.term
                 );
                 self.poll(from_id, acceptance);
-                match self.prs().candidacy_status(self.id, &self.votes) {
+                match self.prs().candidacy_status(&self.votes) {
                     CandidacyStatus::Elected => {
                         if self.state == StateRole::PreCandidate {
                             self.campaign(CAMPAIGN_ELECTION);
