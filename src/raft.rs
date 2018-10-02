@@ -1909,7 +1909,7 @@ impl<T: Storage> Raft<T> {
     /// This should only be called on the leader.
     ///
     /// ```rust
-    /// use raft::{Raft, Config, storage::MemStorage};
+    /// use raft::{Raft, Config, storage::MemStorage, eraftpb::ConfState};
     /// let config = Config {
     ///     id: 1,
     ///     peers: vec![1],
@@ -1918,9 +1918,13 @@ impl<T: Storage> Raft<T> {
     /// let mut raft: Raft<MemStorage> = Raft::new(&config, Default::default());
     /// raft.become_candidate();
     /// raft.become_leader();
-    /// raft.set_nodes(vec![1,2,3], vec![4]).unwrap_or_else(|e| {
+    ///
+    /// let mut conf = ConfState::default();
+    /// conf.set_nodes(vec![1,2,3]);
+    /// conf.set_learners(vec![4]);
+    /// if let Err(e) = raft.set_nodes(&conf) {
     ///     panic!("{}", e);
-    /// });
+    /// }
     /// ```
     ///
     /// # Errors
