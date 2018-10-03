@@ -13,9 +13,8 @@
 //
 //
 use fxhash::FxHashSet;
-use protobuf::{self, RepeatedField};
 use raft::{
-    eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, Message, MessageType},
+    eraftpb::{ConfState, Message, MessageType},
     storage::MemStorage,
     Config, ProgressSet, Raft, Result,
 };
@@ -73,16 +72,37 @@ fn new_unconnected_network<'a>(
     Ok(network)
 }
 
-fn process(network: &mut Network, messages: Vec<Message>) -> Vec<Message> {
+fn connect_peers<'a>(network: &mut Network, voters: impl IntoIterator<Item=&'a u64>, learners: impl IntoIterator<Item=&'a u64>) {
+    let voters = voters.into_iter().cloned().collect::<FxHashSet<_>>();
+    let learners = learners.into_iter().cloned().collect::<FxHashSet<_>>();
+    for voter in voters.clone() {
+        for &other_peer in voters.iter().chain(&learners) {
+            if voter == other_peer { continue; }
+            else { network.peers.get_mut(&other_peer).expect(&format!("Expected node {} to exist.", other_peer)).add_node(voter); }
+        }
+    }
+    for learner in learners.clone() {
+        for &other_peer in voters.iter().chain(&learners) {
+            if learner == other_peer { continue; }
+            else { network.peers.get_mut(&other_peer).expect(&format!("Expected node {} to exist.", other_peer)).add_learner(learner); }
+        }
+    }
+    for peer in voters.iter().chain(&learners) {
+         let messages = network.peers.get_mut(peer).unwrap().read_messages();
+        network.send(messages);
+    }
+}
+
+fn process(network: &mut Network, messages: Vec<Message>) -> Result<Vec<Message>> {
     let mut responses = vec![];
     for message in messages {
         let id = message.get_to();
         // Append
         let peer = network.peers.get_mut(&id).unwrap();
-        peer.step(message);
+        peer.step(message)?;
         responses.append(&mut peer.read_messages());
     }
-    responses
+    Ok(responses)
 }
 
 fn assert_membership<'a>(
@@ -95,12 +115,12 @@ fn assert_membership<'a>(
         .into_iter()
         .cloned()
         .collect::<FxHashSet<_>>();
-    let mut voters = progress_set
+    let voters = progress_set
         .voter_ids()
         .iter()
         .cloned()
         .collect::<FxHashSet<_>>();
-    let mut learners = progress_set
+    let learners = progress_set
         .learner_ids()
         .iter()
         .cloned()
@@ -118,7 +138,7 @@ fn test_one_voter_to_4_peer_cluster() -> Result<()> {
     let start_learners: Vec<u64> = vec![];
     let expected_voters = vec![1, 2, 3];
     let expected_learners = vec![4];
-    exhaustive_phase_by_phase_test(
+    phase_by_phase_test(
         initial_leader,
         start_voters,
         start_learners,
@@ -135,7 +155,7 @@ fn test_4_peer_cluster_to_1_voter() -> Result<()> {
     let start_learners: Vec<u64> = vec![];
     let expected_voters = vec![1, 2, 3];
     let expected_learners = vec![4];
-    exhaustive_phase_by_phase_test(
+    phase_by_phase_test(
         initial_leader,
         start_voters,
         start_learners,
@@ -152,7 +172,24 @@ fn test_3_peer_cluster_replace_node() -> Result<()> {
     let start_learners: Vec<u64> = vec![];
     let expected_voters = vec![1, 2, 4];
     let expected_learners: Vec<u64> = vec![];
-    exhaustive_phase_by_phase_test(
+    phase_by_phase_test(
+        initial_leader,
+        start_voters,
+        start_learners,
+        expected_voters,
+        expected_learners,
+    )
+}
+
+#[test]
+fn test_promote_learner() -> Result<()> {
+    setup_for_test();
+    let initial_leader = 1;
+    let start_voters = vec![1, 2, 3];
+    let start_learners: Vec<u64> = vec![4];
+    let expected_voters = vec![1, 2, 3, 4];
+    let expected_learners: Vec<u64> = vec![];
+    phase_by_phase_test(
         initial_leader,
         start_voters,
         start_learners,
@@ -169,23 +206,7 @@ fn test_3_peer_cluster_add_learner() -> Result<()> {
     let start_learners: Vec<u64> = vec![];
     let expected_voters = vec![1, 2, 3];
     let expected_learners: Vec<u64> = vec![4];
-    exhaustive_phase_by_phase_test(
-        initial_leader,
-        start_voters,
-        start_learners,
-        expected_voters,
-        expected_learners,
-    )
-}
-#[test]
-fn test_3_peer_cluster_add_voter() -> Result<()> {
-    setup_for_test();
-    let initial_leader = 1;
-    let start_voters = vec![1, 2, 3];
-    let start_learners: Vec<u64> = vec![];
-    let expected_voters = vec![1, 2, 3, 4];
-    let expected_learners: Vec<u64> = vec![];
-    exhaustive_phase_by_phase_test(
+    phase_by_phase_test(
         initial_leader,
         start_voters,
         start_learners,
@@ -194,7 +215,58 @@ fn test_3_peer_cluster_add_voter() -> Result<()> {
     )
 }
 
-fn exhaustive_phase_by_phase_test<'a>(
+#[test]
+fn test_3_peer_cluster_add_voter() -> Result<()> {
+    setup_for_test();
+    let initial_leader = 1;
+    let start_voters = vec![1, 2, 3];
+    let start_learners: Vec<u64> = vec![];
+    let expected_voters = vec![1, 2, 3, 4];
+    let expected_learners: Vec<u64> = vec![];
+    phase_by_phase_test(
+        initial_leader,
+        start_voters,
+        start_learners,
+        expected_voters,
+        expected_learners,
+    )
+}
+
+#[test]
+fn test_disjoint_with_remaining_leader() -> Result<()> {
+    setup_for_test();
+    let initial_leader = 1;
+    let start_voters = vec![1, 2, 3];
+    let start_learners: Vec<u64> = vec![4, 5];
+    let expected_voters = vec![1, 6, 7];
+    let expected_learners: Vec<u64> = vec![8, 9];
+    phase_by_phase_test(
+        initial_leader,
+        start_voters,
+        start_learners,
+        expected_voters,
+        expected_learners,
+    )
+}
+
+#[test]
+fn test_disjoint_with_departing_leader() -> Result<()> {
+    setup_for_test();
+    let initial_leader = 1;
+    let start_voters = vec![1, 2, 3];
+    let start_learners: Vec<u64> = vec![4, 5];
+    let expected_voters = vec![6, 7, 8];
+    let expected_learners: Vec<u64> = vec![9, 10];
+    phase_by_phase_test(
+        initial_leader,
+        start_voters,
+        start_learners,
+        expected_voters,
+        expected_learners,
+    )
+}
+
+fn phase_by_phase_test<'a>(
     initial_leader: u64,
     start_voters: impl IntoIterator<Item = u64>,
     start_learners: impl IntoIterator<Item = u64>,
@@ -206,7 +278,6 @@ fn exhaustive_phase_by_phase_test<'a>(
     let expected_voters = expected_voters.into_iter().collect::<FxHashSet<_>>();
     let expected_learners = expected_learners.into_iter().collect::<FxHashSet<_>>();
 
-    let initial_leader = 1;
     let num_messages_start = start_voters.len() + start_learners.len() - 1;
     let num_messages_expected = expected_voters.len() + expected_learners.len() - 1;
     let mut network = new_unconnected_network(
@@ -239,6 +310,8 @@ fn exhaustive_phase_by_phase_test<'a>(
         )
     });
 
+    connect_peers(&mut network, &start_voters, &start_learners);
+
     let messages = network
         .peers
         .get_mut(&initial_leader)
@@ -269,8 +342,8 @@ fn exhaustive_phase_by_phase_test<'a>(
         initial_leader
     );
     assert_membership(
-        &expected_voters,
-        &expected_learners,
+        expected_voters.union(&start_voters),
+        expected_learners.union(&start_learners),
         network.peers[&initial_leader].prs(),
     );
 
@@ -293,7 +366,7 @@ fn exhaustive_phase_by_phase_test<'a>(
         "Should have {} Append messages to send",
         num_messages_expected
     );
-    let messages = process(&mut network, messages);
+    let messages = process(&mut network, messages)?;
 
     warn!("Initializer append responses phase.");
     assert!(
@@ -307,7 +380,7 @@ fn exhaustive_phase_by_phase_test<'a>(
         "Should have {} AppendResponse messages to send",
         num_messages_expected
     );
-    let messages = process(&mut network, messages);
+    let messages = process(&mut network, messages)?;
 
     warn!("Append for BeginSetNodes phase.");
     assert!(
@@ -321,7 +394,7 @@ fn exhaustive_phase_by_phase_test<'a>(
         "Should have {} Append messages to send",
         num_messages_expected
     );
-    let messages = process(&mut network, messages);
+    let messages = process(&mut network, messages)?;
 
     for id in expected_learners.iter().chain(expected_voters.iter()) {
         assert_eq!(
@@ -345,9 +418,9 @@ fn exhaustive_phase_by_phase_test<'a>(
         "Should have {} AppendResponse messages to send",
         num_messages_expected
     );
-    let messages = process(&mut network, messages);
+    let messages = process(&mut network, messages)?;
 
-    assert_eq!(network.peers.get(&1).unwrap().raft_log.committed, 2);
+    assert_eq!(network.peers.get(&initial_leader).unwrap().raft_log.committed, 2);
 
     warn!("Append for CommitSetNodes phase.");
     assert!(
@@ -361,8 +434,13 @@ fn exhaustive_phase_by_phase_test<'a>(
         "Should have {} Append messages to send",
         num_messages_expected
     );
-    let messages = process(&mut network, messages);
 
+    let messages = process(&mut network, messages)?;
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.get_msg_type() == MessageType::MsgAppendResponse)
+    );
     for id in expected_learners.iter().chain(expected_voters.iter()) {
         assert_eq!(network.peers.get(&id).unwrap().raft_log.committed, 2);
         assert_eq!(

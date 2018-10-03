@@ -59,6 +59,15 @@ pub struct Configuration {
     pub learners: FxHashSet<u64>,
 }
 
+impl Configuration {
+    pub fn new(voters: impl IntoIterator<Item=u64>, learners: impl IntoIterator<Item=u64>) -> Self {
+        Self {
+            voters: voters.into_iter().collect(),
+            learners: learners.into_iter().collect(),
+        }
+    }
+}
+
 impl<'a> From<&'a ConfState> for Configuration {
     fn from(conf_state: &'a ConfState) -> Self {
         Self {
@@ -912,8 +921,8 @@ mod test {
 // See https://github.com/pingcap/raft-rs/issues/125
 #[cfg(test)]
 mod test_progress_set {
-    use Result;
-    use {Progress, ProgressSet};
+    use {Result, progress::Configuration, Progress, ProgressSet};
+    use fxhash::FxHashSet;
 
     const CANARY: u64 = 123;
 
@@ -1016,6 +1025,98 @@ mod test_progress_set {
             "Should return an error on invalid promote_learner."
         );
         assert_eq!(pre, *set.get(1).expect("Peer should not have been deleted"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_transition_remove_voter() -> Result<()> {
+        check_set_nodes(&vec![1, 2], &vec![], &vec![1], &vec![])
+    }
+
+    #[test]
+    fn test_config_transition_remove_learner() -> Result<()> {
+        check_set_nodes(&vec![1], &vec![2], &vec![1], &vec![])
+    }
+
+    #[test]
+    fn test_config_transition_conflicting_sets() {
+        assert!(check_set_nodes(&vec![1], &vec![], &vec![1], &vec![1]).is_err())
+    }
+
+    #[test]
+    fn test_config_transition_empty_sets() {
+        assert!(check_set_nodes(&vec![], &vec![], &vec![], &vec![]).is_err())
+    }
+
+    #[test]
+    fn test_config_transition_empty_voters() {
+        assert!(check_set_nodes(&vec![1], &vec![], &vec![], &vec![]).is_err())
+    }
+
+    #[test]
+    fn test_config_transition_add_voter() -> Result<()> {
+        check_set_nodes(&vec![1], &vec![], &vec![1, 2], &vec![])
+    }
+
+    #[test]
+    fn test_config_transition_add_learner() -> Result<()> {
+        check_set_nodes(&vec![1], &vec![], &vec![1], &vec![2])
+    }
+
+    #[test]
+    fn test_config_transition_promote_learner() -> Result<()> {
+        check_set_nodes(&vec![1], &vec![2], &vec![1, 2], &vec![])
+    }
+
+    fn check_set_nodes<'a>(
+        start_voters: impl IntoIterator<Item=&'a u64>,
+        start_learners: impl IntoIterator<Item=&'a u64>,
+        end_voters: impl IntoIterator<Item=&'a u64>,
+        end_learners: impl IntoIterator<Item=&'a u64>
+    ) -> Result<()> {
+        let start_voters = start_voters.into_iter().cloned().collect::<FxHashSet<u64>>();
+        let start_learners = start_learners.into_iter().cloned().collect::<FxHashSet<u64>>();
+        let end_voters = end_voters.into_iter().cloned().collect::<FxHashSet<u64>>();
+        let end_learners = end_learners.into_iter().cloned().collect::<FxHashSet<u64>>();
+        let transition_voters = start_voters.union(&end_voters).cloned().collect::<FxHashSet<u64>>();
+        let transition_learners = start_learners.union(&end_learners).cloned().collect::<FxHashSet<u64>>();
+
+        let mut set = ProgressSet::default();
+        let default_progress = Progress::default();
+
+        for starter in start_voters {
+            set.insert_voter(starter, default_progress.clone())?;
+        }
+        for starter in start_learners {
+            set.insert_learner(starter, default_progress.clone())?;
+        }
+        set.begin_config_transition(Configuration::new(end_voters.clone(), end_learners.clone()))?;
+        println!("Next: {:?}", set.next_configuration);
+        println!("Now: {:?}", set.configuration);
+        assert!(set.is_in_transition());
+        assert_eq!(
+            set.voter_ids(),
+            transition_voters,
+            "Transition state voters inaccurate"
+        );
+        assert_eq!(
+            set.learner_ids(),
+            transition_learners,
+            "Transition state learners inaccurate."
+        );
+
+        set.commit_config_transition()?;
+        assert!(!set.is_in_transition());
+        assert_eq!(
+            set.voter_ids(),
+            end_voters,
+            "End state voters inaccurate"
+        );
+        assert_eq!(
+            set.learner_ids(),
+            end_learners,
+            "End state learners inaccurate"
+        );
         Ok(())
     }
 }
