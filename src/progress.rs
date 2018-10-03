@@ -150,6 +150,9 @@ impl ProgressSet {
     }
 
     /// Returns the status of voters.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn voters(&self) -> impl Iterator<Item = (&u64, &Progress)> {
         let set = self.voter_ids();
@@ -157,6 +160,9 @@ impl ProgressSet {
     }
 
     /// Returns the status of learners.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn learners(&self) -> impl Iterator<Item = (&u64, &Progress)> {
         let set = self.learner_ids();
@@ -164,6 +170,9 @@ impl ProgressSet {
     }
 
     /// Returns the mutable status of voters.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn voters_mut(&mut self) -> impl Iterator<Item = (&u64, &mut Progress)> {
         let ids = self.voter_ids();
@@ -173,6 +182,9 @@ impl ProgressSet {
     }
 
     /// Returns the mutable status of learners.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn learners_mut(&mut self) -> impl Iterator<Item = (&u64, &mut Progress)> {
         let ids = self.learner_ids();
@@ -182,6 +194,9 @@ impl ProgressSet {
     }
 
     /// Returns the ids of all known voters.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn voter_ids(&self) -> FxHashSet<u64> {
         match self.next_configuration {
@@ -196,6 +211,9 @@ impl ProgressSet {
     }
 
     /// Returns the ids of all known learners.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn learner_ids(&self) -> FxHashSet<u64> {
         match self.next_configuration {
@@ -222,12 +240,18 @@ impl ProgressSet {
     }
 
     /// Returns an iterator across all the nodes and their progress.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&u64, &Progress)> {
         self.progress.iter()
     }
 
     /// Returns a mutable iterator across all the nodes and their progress.
+    ///
+    /// **Note:** Do not use this for majority/quorum calculation. The Raft node may be
+    /// transitioning to a new configuration and have two qourums. Use `has_quorum` instead.
     #[inline]
     pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = (&u64, &mut Progress)> {
         self.progress.iter_mut()
@@ -410,6 +434,8 @@ impl ProgressSet {
     }
 
     /// Determine if a quorum is formed from the given set of nodes.
+    ///
+    /// This is the only correct way to verify you have reached a quorum for the whole group.
     #[inline]
     pub fn has_quorum(&self, potential_quorum: &FxHashSet<u64>) -> bool {
         self.configuration.has_quorum(potential_quorum) && self
