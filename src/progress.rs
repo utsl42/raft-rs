@@ -267,7 +267,9 @@ impl ProgressSet {
             Err(Error::Exists(id, "voters"))?;
         }
         self.configuration.voters.insert(id);
-        self.next_configuration.as_mut().map(|config| config.voters.insert(id));
+        self.next_configuration
+            .as_mut()
+            .map(|config| config.voters.insert(id));
 
         self.progress.insert(id, pr);
         self.assert_progress_and_configuration_consistent();
@@ -352,8 +354,7 @@ impl ProgressSet {
         debug_assert!(
             self.progress
                 .keys()
-                .all(|v| self.learner_ids().contains(v)
-                    || self.voter_ids().contains(v))
+                .all(|v| self.learner_ids().contains(v) || self.voter_ids().contains(v))
         );
         assert_eq!(
             self.voter_ids().len() + self.learner_ids().len(),
@@ -393,7 +394,7 @@ impl ProgressSet {
                     rejects.insert(id);
                 }
                 (accepts, rejects)
-            }
+            },
         );
         if self.configuration.has_quorum(&accepts) {
             return CandidacyStatus::Elected;
@@ -488,9 +489,7 @@ impl ProgressSet {
         for id in next.voters.iter().chain(&next.learners) {
             // TODO: Fill ins_size with correct value.
             let new_progress = Progress::new(1, 10);
-            self.progress
-                .entry(*id)
-                .or_insert_with(|| new_progress);
+            self.progress.entry(*id).or_insert_with(|| new_progress);
         }
         self.next_configuration = Some(next);
         // Now we create progresses for any that do not exist.

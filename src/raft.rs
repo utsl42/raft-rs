@@ -28,7 +28,8 @@
 use std::cmp;
 
 use eraftpb::{
-    ConfChange, ConfChangeType, Entry, EntryType, HardState, Message, MessageType, Snapshot, ConfState,
+    ConfChange, ConfChangeType, ConfState, Entry, EntryType, HardState, Message, MessageType,
+    Snapshot,
 };
 use fxhash::FxHashMap;
 use protobuf;
@@ -1076,8 +1077,7 @@ impl<T: Storage> Raft<T> {
                     StateRole::Follower => self.step_follower(m)?,
                     StateRole::Leader => self.step_leader(m)?,
                 }
-
-            },
+            }
             _ => match self.state {
                 StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
                 StateRole::Follower => self.step_follower(m)?,
@@ -1099,16 +1099,20 @@ impl<T: Storage> Raft<T> {
                 let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
 
                 if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
-                    warn!("Got begin set nodes on {}, idx {}", self.id, entry.get_index());
+                    warn!(
+                        "Got begin set nodes on {}, idx {}",
+                        self.id,
+                        entry.get_index()
+                    );
                     let configuration = conf_change.get_configuration();
                     self.began_set_nodes_at = Some(self.raft_log.last_index() + 1);
                     self.mut_prs().begin_config_transition(configuration)?;
-                    // if self.state == StateRole::Leader {
-                    //     let mut entries = Vec::from(m.get_entries());
-                    //     self.append_entry(&mut entries);
-                    //     self.bcast_append();
-                    //     self.pending_conf_index = self.raft_log.last_index();
-                    // }
+                // if self.state == StateRole::Leader {
+                //     let mut entries = Vec::from(m.get_entries());
+                //     self.append_entry(&mut entries);
+                //     self.bcast_append();
+                //     self.pending_conf_index = self.raft_log.last_index();
+                // }
                 } else if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
                     warn!("Got commit set nodes on {}", self.id);
                     self.mut_prs().commit_config_transition()?;
@@ -1915,7 +1919,7 @@ impl<T: Storage> Raft<T> {
     ///     peers: vec![1],
     ///     ..Default::default()
     /// };
-    /// let mut raft: Raft<MemStorage> = Raft::new(&config, Default::default());
+    /// let mut raft: Raft<MemStorage> = Raft::new(&config, Default::default()).unwrap();
     /// raft.become_candidate();
     /// raft.become_leader();
     ///
@@ -1931,10 +1935,7 @@ impl<T: Storage> Raft<T> {
     ///
     /// * `voters` and `learners` are not mutually exclusive.
     /// * `voters` is empty.
-    pub fn set_nodes(
-        &mut self,
-        conf_state: &ConfState,
-    ) -> Result<()> {
+    pub fn set_nodes(&mut self, conf_state: &ConfState) -> Result<()> {
         if self.state != StateRole::Leader {
             Err(Error::InvalidState(self.state))?;
         }
@@ -1956,7 +1957,7 @@ impl<T: Storage> Raft<T> {
         message.set_msg_type(MessageType::MsgPropose);
         message.set_from(self.id);
         message.set_index(self.raft_log.last_index() + 1);
-    	message.set_entries(RepeatedField::from_vec(vec![entry]));
+        message.set_entries(RepeatedField::from_vec(vec![entry]));
         // `append_entry` sets term, index for us.
         self.step(message)?;
         Ok(())

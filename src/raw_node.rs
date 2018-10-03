@@ -314,7 +314,9 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
             ConfChangeType::BeginSetNodes => self.raft.set_nodes(cc.get_configuration()).unwrap(),
-            ConfChangeType::CommitSetNodes => unreachable!("CommitSetNodes should occur in the cluster"),
+            ConfChangeType::CommitSetNodes => {
+                unreachable!("CommitSetNodes should occur in the cluster")
+            }
         }
         let mut cs = ConfState::new();
         cs.set_nodes(self.raft.prs().voter_ids().iter().cloned().collect());
