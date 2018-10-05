@@ -191,9 +191,9 @@ fn test_cluster_to_single_leader() -> Result<()> {
     let end = (&[1], &[]);
     let all = (end.0.into_iter().chain(start.0.into_iter()), end.1.into_iter().chain(start.1.into_iter()));
     let mut scenario = Scenario::initialize(
-        leader, all.0, all.1
+        leader, start.0, start.1
     )?;
-    scenario.connect(start.0, start.1)?;
+    // scenario.connect(start.0, start.1)?;
     scenario.send_set_nodes(end.0, end.1)?;
     // scenario.initialize_peers(&[]);
     scenario.drive_to(Phase::Finalized)?;
@@ -244,12 +244,27 @@ fn test_add_learner() -> Result<()> {
     let mut scenario = Scenario::initialize(
         leader, all.0, all.1
     )?;
-    scenario.connect(start.0, start.1)?;
     scenario.send_set_nodes(end.0, end.1)?;
     let messages = scenario.initialize_new_peers(&[4])?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
+}
+
+// fn calculate_all_and_new<'a>(start: &'a (&'a [u64], &'a [u64]), end: &'a (&'a [u64], &'a [u64])) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
+fn calculate_all_and_new<'a>(start: (impl IntoIterator<Item=&'a u64>, impl IntoIterator<Item=&'a u64>), end: (impl IntoIterator<Item=&'a u64>, impl IntoIterator<Item=&'a u64>)) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
+    let end = (end.0.into_iter().collect::<FxHashSet<_>>(), end.1.into_iter().collect::<FxHashSet<_>>());
+    let start = (start.0.into_iter().collect::<FxHashSet<_>>(), start.1.into_iter().collect::<FxHashSet<_>>());
+    let all = (
+        end.0.iter().chain(start.0.iter()).map(|v| **v).collect(),
+        end.1.iter().chain(start.1.iter()).map(|v| **v).collect()
+    );
+    let new = (
+        start.0.symmetric_difference(&end.0).map(|v| **v).collect::<Vec<_>>(),
+        start.1.symmetric_difference(&end.1).map(|v| **v).collect::<Vec<_>>(),
+    );
+
+    (all, new)
 }
 
 #[test]
@@ -258,13 +273,13 @@ fn test_add_voter() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[]);
     let end = (&[1, 2, 3, 4], &[]);
-    let all = (end.0.into_iter().chain(start.0.into_iter()), end.1.into_iter().chain(start.1.into_iter()));
+    let (all, new) = calculate_all_and_new(start, end);
     let mut scenario = Scenario::initialize(
-        leader, all.0, all.1
+        leader, start.0, start.1
     )?;
-    scenario.connect(start.0, start.1)?;
     scenario.send_set_nodes(end.0, end.1)?;
-    // scenario.initialize_peers(&[4]);
+    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
 }
@@ -390,23 +405,41 @@ impl Scenario {
         voters: impl IntoIterator<Item = &'a u64>,
         learners: impl IntoIterator<Item = &'a u64>,
     ) -> Result<Self> {
-        debug!("Begin initialize phase.");
-        let voters = voters.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
-        let learners = learners.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
+        let voter_ids = voters.into_iter().map(|v| *v).collect::<Vec<_>>();
+        let learner_ids = learners.into_iter().map(|v| *v).collect::<Vec<_>>();
+        info!("Begin initialize phase, voters: {:?}, learners: {:?}.", voter_ids, learner_ids);
+        let voters = voter_ids.iter().map(|v|
+            Some(Interface::new(Raft::new(&Config {
+                id: *v,
+                tag: format!("{}", *v),
+                peers: voter_ids.clone(),
+                learners: learner_ids.clone(),
+                ..Default::default()
+            }, MemStorage::new()).unwrap()))
+        ).collect::<Vec<_>>();
+        let learners = learner_ids.iter().map(|v|
+            Some(Interface::new(Raft::new(&Config {
+                id: *v,
+                tag: format!("{}", *v),
+                peers: voter_ids.clone(),
+                learners: learner_ids.clone(),
+                ..Default::default()
+            }, MemStorage::new()).unwrap()))
+        ).collect::<Vec<_>>();
 
         // Build up a network.
-        let mut network = new_unconnected_network(
-            leader,
-            &voters,
-            &learners,
-        )?;
+        let mut network = Network::new(
+            voters.into_iter().chain(learners.into_iter()).collect(),
+        );
+        network.peers.get_mut(&leader).unwrap().become_candidate();
+        network.peers.get_mut(&leader).unwrap().become_leader();
         let scenario = Scenario::network_at_phase(leader, network, Phase::Initialized);
         Ok(scenario)
     }
 
-    /// Connects the given peers together in the network.
-    ///
-    /// Typically this is called to connect together the starting peers in the network.
+    ///// Connects the given peers together in the network.
+    /////
+    ///// Typically this is called to connect together the starting peers in the network.
     fn connect<'a>(
         &mut self,
         voters: impl IntoIterator<Item = &'a u64>,
@@ -415,7 +448,7 @@ impl Scenario {
         assert_eq!(self.phase, Phase::Initialized);
         let voters = voters.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
         let learners = learners.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Proceeding through {:?} phase.", self.phase);
         info!("Connecting {:?}", voters.union(&learners).collect::<Vec<_>>());
 
         connect_peers(self, &voters, &learners);
@@ -428,7 +461,7 @@ impl Scenario {
         voters: impl IntoIterator<Item = &'a u64>,
         learners: impl IntoIterator<Item = &'a u64>,
     ) -> Result<()> {
-        assert_eq!(self.phase, Phase::StartClusterConnected);
+        assert_eq!(self.phase, Phase::Initialized);
         debug!("Proceeding through {:?} phase.", self.phase);
         let mut configuration = ConfState::new();
         configuration.set_nodes(voters.into_iter().cloned().collect());
@@ -455,6 +488,21 @@ impl Scenario {
         let peers = peers.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
         let leader = self.leader;
 
+        // Currently the network is not populated with the declared new peers.
+        // So we must initialize them.
+        let leader = self.leader;
+        let voters = self.peers.get_mut(&leader).unwrap().prs().voter_ids().into_iter().collect::<Vec<_>>();
+        let learners = self.peers.get_mut(&leader).unwrap().prs().learner_ids().into_iter().collect::<Vec<_>>();
+        for peer in peers {
+            self.network.peers.insert(peer, Interface::new(Raft::new(&Config {
+                id: peer,
+                peers: voters.clone(),
+                learners: learners.clone(),
+                tag: format!("{}", peer),
+                ..Default::default()
+            }, MemStorage::new())?));
+        }
+
         let mut pending_set_nodes = vec![];
         let mut pending_initialization_messages = vec![];
         // When new peer are first contacted they initialize entries to their log.
@@ -464,11 +512,12 @@ impl Scenario {
         let mut messages = self.network.peers.get_mut(&leader).unwrap()
             .read_messages();
         while !pending_initialization_messages.is_empty() || !messages.is_empty() {
-            info!("Pending: {} uncategorized messages, {} initialization_messages", messages.len(), pending_initialization_messages.len());
+            info!("Pending: {} uncategorized messages, {} initialization_messages, {} SetNodes", messages.len(), pending_initialization_messages.len(), pending_set_nodes.len());
             for message in messages.drain(..) {
                 let is_set_nodes = {
-                    let entry = message.get_entries().iter().next().unwrap();
-                    protobuf::parse_from_bytes::<ConfChange>(entry.get_data()).unwrap().get_change_type() == ConfChangeType::BeginSetNodes
+                    if let Some(entry) = message.get_entries().iter().next() {
+                        protobuf::parse_from_bytes::<ConfChange>(entry.get_data()).unwrap().get_change_type() == ConfChangeType::BeginSetNodes
+                    } else { false }
                 };
                 if is_set_nodes {
                     pending_set_nodes.push(message);
@@ -511,12 +560,18 @@ impl Scenario {
         debug!("Proceeding through {:?} phase.", self.phase);
         let messages = self.network
             .read_messages();
+        let mut responses_to_collect = vec![];
         for message in messages.iter() {
             assert_eq!(message.get_msg_type(), MessageType::MsgAppendResponse);
             assert_eq!(message.get_reject(), false);
             assert!(message.get_entries().iter().next().is_none());
+            responses_to_collect.push(message.get_to());
         }
         self.network.dispatch(messages)?;
+        for respondee in responses_to_collect {
+            let response = self.network.peers.get_mut(&respondee).unwrap().read_messages();
+            self.network.dispatch(response);
+        }
         debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::LeaderHasBeginSetNodesResponses);
         Ok(())
@@ -525,8 +580,9 @@ impl Scenario {
         assert_eq!(self.phase, Phase::LeaderHasBeginSetNodesResponses);
         debug!("Proceeding through {:?} phase.", self.phase);
         let messages = self.network
-            .read_messages();
+            .peers.get_mut(&self.leader).unwrap().read_messages();
         for message in messages.iter() {
+            println!("{:?}", message);
             let entry = message.get_entries().iter().next().unwrap();
             assert_eq!(message.get_msg_type(), MessageType::MsgAppend);
             let data = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
