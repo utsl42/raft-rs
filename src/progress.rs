@@ -60,7 +60,10 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    pub fn new(voters: impl IntoIterator<Item=u64>, learners: impl IntoIterator<Item=u64>) -> Self {
+    pub fn new(
+        voters: impl IntoIterator<Item = u64>,
+        learners: impl IntoIterator<Item = u64>,
+    ) -> Self {
         Self {
             voters: voters.into_iter().collect(),
             learners: learners.into_iter().collect(),
@@ -432,7 +435,9 @@ impl ProgressSet {
                 active.insert(id);
                 continue;
             }
-            if pr.recent_active { active.insert(id); }
+            if pr.recent_active {
+                active.insert(id);
+            }
             pr.recent_active = false;
         }
         for (&_id, pr) in self.learners_mut() {
@@ -921,8 +926,8 @@ mod test {
 // See https://github.com/pingcap/raft-rs/issues/125
 #[cfg(test)]
 mod test_progress_set {
-    use {Result, progress::Configuration, Progress, ProgressSet};
     use fxhash::FxHashSet;
+    use {progress::Configuration, Progress, ProgressSet, Result};
 
     const CANARY: u64 = 123;
 
@@ -1069,17 +1074,32 @@ mod test_progress_set {
     }
 
     fn check_set_nodes<'a>(
-        start_voters: impl IntoIterator<Item=&'a u64>,
-        start_learners: impl IntoIterator<Item=&'a u64>,
-        end_voters: impl IntoIterator<Item=&'a u64>,
-        end_learners: impl IntoIterator<Item=&'a u64>
+        start_voters: impl IntoIterator<Item = &'a u64>,
+        start_learners: impl IntoIterator<Item = &'a u64>,
+        end_voters: impl IntoIterator<Item = &'a u64>,
+        end_learners: impl IntoIterator<Item = &'a u64>,
     ) -> Result<()> {
-        let start_voters = start_voters.into_iter().cloned().collect::<FxHashSet<u64>>();
-        let start_learners = start_learners.into_iter().cloned().collect::<FxHashSet<u64>>();
+        let start_voters = start_voters
+            .into_iter()
+            .cloned()
+            .collect::<FxHashSet<u64>>();
+        let start_learners = start_learners
+            .into_iter()
+            .cloned()
+            .collect::<FxHashSet<u64>>();
         let end_voters = end_voters.into_iter().cloned().collect::<FxHashSet<u64>>();
-        let end_learners = end_learners.into_iter().cloned().collect::<FxHashSet<u64>>();
-        let transition_voters = start_voters.union(&end_voters).cloned().collect::<FxHashSet<u64>>();
-        let transition_learners = start_learners.union(&end_learners).cloned().collect::<FxHashSet<u64>>();
+        let end_learners = end_learners
+            .into_iter()
+            .cloned()
+            .collect::<FxHashSet<u64>>();
+        let transition_voters = start_voters
+            .union(&end_voters)
+            .cloned()
+            .collect::<FxHashSet<u64>>();
+        let transition_learners = start_learners
+            .union(&end_learners)
+            .cloned()
+            .collect::<FxHashSet<u64>>();
 
         let mut set = ProgressSet::default();
         let default_progress = Progress::default();
@@ -1091,8 +1111,6 @@ mod test_progress_set {
             set.insert_learner(starter, default_progress.clone())?;
         }
         set.begin_config_transition(Configuration::new(end_voters.clone(), end_learners.clone()))?;
-        println!("Next: {:?}", set.next_configuration);
-        println!("Now: {:?}", set.configuration);
         assert!(set.is_in_transition());
         assert_eq!(
             set.voter_ids(),
@@ -1107,11 +1125,7 @@ mod test_progress_set {
 
         set.commit_config_transition()?;
         assert!(!set.is_in_transition());
-        assert_eq!(
-            set.voter_ids(),
-            end_voters,
-            "End state voters inaccurate"
-        );
+        assert_eq!(set.voter_ids(), end_voters, "End state voters inaccurate");
         assert_eq!(
             set.learner_ids(),
             end_learners,
