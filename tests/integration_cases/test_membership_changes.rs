@@ -27,12 +27,12 @@ fn test_single_to_cluster() -> Result<()> {
     let leader = 1;
     let start = (&[1], &[]);
     let end = (&[1, 2, 3], &[4]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[2, 3, 4];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -44,12 +44,12 @@ fn test_cluster_to_single_leader() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[]);
     let end = (&[1], &[]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -61,12 +61,12 @@ fn test_replace_node() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[]);
     let end = (&[1, 2, 4], &[]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[4];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -78,12 +78,12 @@ fn test_promote_learner() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[4]);
     let end = (&[1, 2, 3, 4], &[]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -95,12 +95,12 @@ fn test_add_learner() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[]);
     let end = (&[1, 2, 3], &[4]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[4];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -112,12 +112,12 @@ fn test_add_voter() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[]);
     let end = (&[1, 2, 3, 4], &[]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[4];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -129,12 +129,12 @@ fn test_disjoint_with_remaining_leader() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[4, 5]);
     let end = (&[1, 6, 7, 8], &[9, 10]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[6, 7, 8, 9, 10];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -146,12 +146,12 @@ fn test_disjoint_with_departing_leader() -> Result<()> {
     let leader = 1;
     let start = (&[1, 2, 3], &[4, 5]);
     let end = (&[1, 6, 7, 8], &[9, 10]);
-    let (all, new) = calculate_all_and_new(start, end);
+    let new = &[6, 7, 8, 9, 10];
     let mut scenario = Scenario::initialize(
         leader, start.0, start.1
     )?;
     scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new.0.iter().chain(&new.1))?;
+    let messages = scenario.initialize_new_peers(new)?;
     scenario.replicate_begin_set_nodes(messages)?;
     scenario.drive_to(Phase::Finalized)?;
     Ok(())
@@ -458,21 +458,6 @@ impl Scenario {
         self.phase(Phase::Finalized);
         Ok(())
     }
-}
-
-fn calculate_all_and_new<'a>(start: (impl IntoIterator<Item=&'a u64>, impl IntoIterator<Item=&'a u64>), end: (impl IntoIterator<Item=&'a u64>, impl IntoIterator<Item=&'a u64>)) -> ((Vec<u64>, Vec<u64>), (Vec<u64>, Vec<u64>)) {
-    let end = (end.0.into_iter().collect::<FxHashSet<_>>(), end.1.into_iter().collect::<FxHashSet<_>>());
-    let start = (start.0.into_iter().collect::<FxHashSet<_>>(), start.1.into_iter().collect::<FxHashSet<_>>());
-    let all = (
-        end.0.iter().chain(start.0.iter()).map(|v| **v).collect(),
-        end.1.iter().chain(start.1.iter()).map(|v| **v).collect()
-    );
-    let new = (
-        start.0.symmetric_difference(&end.0).map(|v| **v).collect::<Vec<_>>(),
-        start.1.symmetric_difference(&end.1).map(|v| **v).collect::<Vec<_>>(),
-    );
-
-    (all, new)
 }
 
 fn connect_peers<'a>(
