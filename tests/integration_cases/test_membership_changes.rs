@@ -21,21 +21,108 @@ use raft::{
 use protobuf;
 use test_util::{setup_for_test, Interface, Network};
 
-#[test]
-fn test_single_to_cluster() -> Result<()> {
-    setup_for_test();
-    let leader = 1;
-    let start = (&[1], &[]);
-    let end = (&[1, 2, 3], &[4]);
-    let new = &[2, 3, 4];
-    let mut scenario = Scenario::initialize(
-        leader, start.0, start.1
-    )?;
-    scenario.send_set_nodes(end.0, end.1)?;
-    let messages = scenario.initialize_new_peers(new)?;
-    scenario.replicate_begin_set_nodes(messages)?;
-    scenario.drive_to(Phase::Finalized)?;
-    Ok(())
+mod single_to_cluster {
+    use super::*;
+    
+    #[test]
+    fn stable() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let start = (&[1], &[]);
+        let end = (&[1, 2, 3], &[4]);
+        let new = &[2, 3, 4];
+        let mut scenario = Scenario::initialize(
+            leader, start.0, start.1
+        )?;
+        scenario.send_set_nodes(end.0, end.1)?;
+        let messages = scenario.initialize_new_peers(new)?;
+        scenario.replicate_begin_set_nodes(messages)?;
+        scenario.drive_to(Phase::Finalized)?;
+        Ok(())
+    }
+
+    #[test]
+    fn minority_follower_failure() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let start = (&[1], &[]);
+        let end = (&[1, 2, 3], &[4]);
+        let new = &[2, 3, 4];
+        let failed = &[2];
+        let mut scenario = Scenario::initialize(
+            leader, start.0, start.1
+        )?;
+        scenario.send_set_nodes(end.0, end.1)?;
+        let messages = scenario.initialize_new_peers(new)?;
+        failed.iter().for_each(|&failure| { scenario.isolate(failure); });
+        scenario.replicate_begin_set_nodes(messages)?;
+        assert!(scenario.transitioning(true, &[1]));
+        scenario.drive_to(Phase::LeaderHasBeginSetNodesResponses);
+        assert!(scenario.transitioning(true, &[3, 4]));
+        assert!(scenario.transitioning(false, &[1]));
+        scenario.drive_to(Phase::LeaderHasCommitSetNodesResponses);
+        assert!(scenario.transitioning(false, &[1, 3, 4]));
+        scenario.drive_to(Phase::Finalized);
+        Ok(())
+    }
+
+    #[test]
+    fn majority_follower_failure() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let start = (&[1], &[]);
+        let end = (&[1, 2, 3], &[4]);
+        let new = &[2, 3, 4];
+        let failed = &[2, 3];
+        let mut scenario = Scenario::initialize(
+            leader, start.0, start.1
+        )?;
+        scenario.send_set_nodes(end.0, end.1)?;
+        let messages = scenario.initialize_new_peers(new)?;
+        failed.iter().for_each(|&failure| { scenario.isolate(failure); });
+        scenario.replicate_begin_set_nodes(messages)?;
+        assert!(scenario.transitioning(true, &[1]));
+        // Since the majority is down, the cluster can't progress.
+        scenario.drive_to(Phase::LeaderHasBeginSetNodesResponses);
+        assert!(scenario.transitioning(true, &[1, 4]));
+        assert!(scenario.transitioning(false, &[2, 3]));
+        scenario.drive_to(Phase::LeaderHasCommitSetNodesResponses);
+        assert!(scenario.transitioning(true, &[1, 4]));
+        assert!(scenario.transitioning(false, &[2, 3]));
+        scenario.drive_to(Phase::Finalized);
+        Ok(())
+    }
+
+    #[test]
+    fn majority_follower_failure_with_recovery() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let start = (&[1], &[]);
+        let end = (&[1, 2, 3], &[4]);
+        let new = &[2, 3, 4];
+        let failed = &[2, 3];
+        let mut scenario = Scenario::initialize(
+            leader, start.0, start.1
+        )?;
+        scenario.send_set_nodes(end.0, end.1)?;
+        let messages = scenario.initialize_new_peers(new)?;
+        failed.iter().for_each(|&failure| { scenario.isolate(failure); });
+        scenario.replicate_begin_set_nodes(messages)?;
+        // Since the majority is down, the cluster can't progress.
+        assert!(scenario.transitioning(true, &[1, 4]));
+        assert!(scenario.transitioning(false, &[2, 3]));
+        // Let it try again.
+        scenario.phase(Phase::NewPeersInitialized);
+        warn!("Recovered");
+        scenario.recover();
+        scenario.heartbeat_timeout_and_exchange(&[1]);
+        scenario.drive_to(Phase::PeersHaveBeginSetNodes)?;
+        assert!(scenario.transitioning(true, &[1, 2, 3, 4]));
+        scenario.drive_to(Phase::LeaderHasCommitSetNodesResponses)?;
+        assert!(scenario.transitioning(false, &[1, 2, 3, 4]));
+        scenario.drive_to(Phase::Finalized);
+        Ok(())
+    }
 }
 
 #[test]
@@ -211,21 +298,21 @@ impl Scenario {
     ///
     /// This must be called on after the cluster has been allowed to initialize any new peers.
     fn drive_to(&mut self, to: Phase) -> Result<()> {
-        assert!(self.phase < to);
+        assert!(self.phase < to, "Already in {:?} phase", to);
         assert!(self.phase >= Phase::NewPeersInitialized, "Cluster must have at least received a `set_nodes` call and initialized new peers before it can be driven.");
-        if self.phase < Phase::PeersHaveBeginSetNodes {
+        if self.phase < Phase::PeersHaveBeginSetNodes && to >= Phase::PeersHaveBeginSetNodes {
             self.replicate_begin_set_nodes(vec![])?;
         }
-        if self.phase < Phase::LeaderHasBeginSetNodesResponses {
+        if self.phase < Phase::LeaderHasBeginSetNodesResponses && to >= Phase::LeaderHasBeginSetNodesResponses  {
             self.receive_begin_set_nodes_responses()?;
         }
-        if self.phase < Phase::PeersHaveCommitSetNodes {
+        if self.phase < Phase::PeersHaveCommitSetNodes && to >= Phase::PeersHaveCommitSetNodes {
             self.replicate_commit_set_nodes()?;
         }
-        if self.phase < Phase::LeaderHasCommitSetNodesResponses {
+        if self.phase < Phase::LeaderHasCommitSetNodesResponses && to >= Phase::LeaderHasCommitSetNodesResponses {
             self.receive_commit_set_nodes_responses()?;
         }
-        if self.phase < Phase::Finalized {
+        if self.phase < Phase::Finalized && to >= Phase::Finalized {
             self.finalize()?;
         }
         Ok(())
@@ -273,6 +360,7 @@ impl Scenario {
         network.peers.get_mut(&leader).unwrap().become_candidate();
         network.peers.get_mut(&leader).unwrap().become_leader();
         let scenario = Scenario::network_at_phase(leader, network, Phase::Initialized);
+        info!("Initialized.");
         Ok(scenario)
     }
 
@@ -287,12 +375,11 @@ impl Scenario {
         assert_eq!(self.phase, Phase::Initialized);
         let voters = voters.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
         let learners = learners.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
-        info!("Proceeding through {:?} phase.", self.phase);
-        info!("Connecting {:?}", voters.union(&learners).collect::<Vec<_>>());
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::StartClusterConnected);
 
         connect_peers(self, &voters, &learners);
-        debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::StartClusterConnected);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(())
     }
 
@@ -301,7 +388,7 @@ impl Scenario {
         learners: impl IntoIterator<Item = &'a u64>,
     ) -> Result<()> {
         assert_eq!(self.phase, Phase::Initialized);
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::ReceivedSetNodes);
         let mut configuration = ConfState::new();
         configuration.set_nodes(voters.into_iter().cloned().collect());
         configuration.set_learners(learners.into_iter().cloned().collect());
@@ -309,8 +396,8 @@ impl Scenario {
             peer.set_nodes(&configuration)?;
             assert!(peer.prs().is_in_transition());
         }
-        debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::ReceivedSetNodes);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(())
     }
     /// The leader is going to send any new peers an initial request, which they will reject,
@@ -323,7 +410,7 @@ impl Scenario {
     /// the right state.
     fn initialize_new_peers<'a>(&mut self, peers: impl IntoIterator<Item = &'a u64>) -> Result<Vec<Message>> {
         assert_eq!(self.phase, Phase::ReceivedSetNodes);
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::NewPeersInitialized);
         let peers = peers.into_iter().map(|v| *v).collect::<FxHashSet<_>>();
         let leader = self.leader;
 
@@ -373,30 +460,31 @@ impl Scenario {
             messages.append(&mut self.network.peers.get_mut(&leader).unwrap()
                 .read_messages());
         }
-        debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::NewPeersInitialized);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(pending_set_nodes)
     }
     fn replicate_begin_set_nodes(&mut self, pending_set_nodes: impl Into<Option<Vec<Message>>>) -> Result<()> {
         assert_eq!(self.phase, Phase::NewPeersInitialized);
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::PeersHaveBeginSetNodes);
 
         let messages = self.network.read_messages().into_iter().chain(pending_set_nodes.into().unwrap_or(vec![])).collect::<Vec<_>>();
         for message in messages.iter() {
             assert_eq!(message.get_msg_type(), MessageType::MsgAppend);
-            let entry = message.get_entries().iter().next().unwrap();
-            let data = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-            assert_eq!(data.get_change_type(), ConfChangeType::BeginSetNodes, "Peer ID: {:?}", data.get_node_id());
+            if let Some(entry) = message.get_entries().iter().next() {
+                let data = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+                assert_eq!(data.get_change_type(), ConfChangeType::BeginSetNodes, "Peer ID: {:?}", data.get_node_id());
+            }
         }
         self.network.dispatch(messages)?;
-        debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::PeersHaveBeginSetNodes);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(())
     }
     ///
     fn receive_begin_set_nodes_responses(&mut self) -> Result<()> {
         assert_eq!(self.phase, Phase::PeersHaveBeginSetNodes);
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::LeaderHasBeginSetNodesResponses);
         let messages = self.network
             .read_messages();
         let mut responses_to_collect = vec![];
@@ -407,34 +495,35 @@ impl Scenario {
             responses_to_collect.push(message.get_to());
         }
         self.network.dispatch(messages)?;
-        for respondee in responses_to_collect {
-            let response = self.network.peers.get_mut(&respondee).unwrap().read_messages();
-            self.network.dispatch(response);
-        }
-        debug!("Finished {:?} phase.", self.phase);
+        // for respondee in responses_to_collect {
+        //     let response = self.network.peers.get_mut(&respondee).unwrap().read_messages();
+        //     self.network.dispatch(response);
+        // }
         self.phase(Phase::LeaderHasBeginSetNodesResponses);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(())
     }
     fn replicate_commit_set_nodes(&mut self) -> Result<()> {
         assert_eq!(self.phase, Phase::LeaderHasBeginSetNodesResponses);
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::PeersHaveCommitSetNodes);
         let messages = self.network
             .peers.get_mut(&self.leader).unwrap().read_messages();
+        let messages = self.network.filter(messages);
         for message in messages.iter() {
-            println!("{:?}", message);
-            let entry = message.get_entries().iter().next().unwrap();
             assert_eq!(message.get_msg_type(), MessageType::MsgAppend);
-            let data = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-            assert_eq!(data.get_change_type(), ConfChangeType::CommitSetNodes);
+            if let Some(entry) = message.get_entries().iter().next() {
+                let data = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+                assert_eq!(data.get_change_type(), ConfChangeType::CommitSetNodes);
+            }
         }
         self.network.dispatch(messages)?;
-        debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::PeersHaveCommitSetNodes);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(())
     }
     fn receive_commit_set_nodes_responses(&mut self) -> Result<()> {
         assert_eq!(self.phase, Phase::PeersHaveCommitSetNodes);
-        debug!("Proceeding through {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::LeaderHasCommitSetNodesResponses);
         let messages = self.network
             .read_messages();
         for message in messages.iter() {
@@ -443,20 +532,44 @@ impl Scenario {
             assert!(message.get_entries().iter().next().is_none());
         }
         self.network.dispatch(messages)?;
-        debug!("Finished {:?} phase.", self.phase);
         self.phase(Phase::LeaderHasCommitSetNodesResponses);
+        debug!("Now in {:?} phase.", self.phase);
         Ok(())
     }
     fn finalize(&mut self) -> Result<()> {
         assert_eq!(self.phase, Phase::LeaderHasCommitSetNodesResponses);
-        debug!("Proceeding through {:?} phase.", self.phase);
-        for (id, _) in self.network.peers.get(&self.leader).unwrap().prs().iter() {
-           assert!(!self.network.peers.get(&id).unwrap().prs().is_in_transition(),
-                   "Peer {:?} should have left transition.", id);
-        }
-        debug!("Finished {:?} phase.", self.phase);
+        info!("Transitioning from {:?} to {:?}.", self.phase, Phase::Finalized);
+        // for (id, _) in self.network.peers.get(&self.leader).unwrap().prs().iter() {
+        //    assert!(!self.network.peers.get(&id).unwrap().prs().is_in_transition(),
+        //            "Peer {:?} should have left transition.", id);
+        // }
+        debug!("Now in {:?} phase.", self.phase);
         self.phase(Phase::Finalized);
         Ok(())
+    }
+    fn transitioning<'a>(&self, expected: bool, peers: impl IntoIterator<Item = &'a u64>) -> bool {
+        peers.into_iter().all(|id| {
+            let is_transitioning = self.network.peers[id].prs().is_in_transition();
+            if is_transitioning != expected {
+                debug!("{} transition state: {}, should be {}", id, is_transitioning, expected);
+            }
+            is_transitioning == expected
+        })
+    }
+    fn heartbeat_timeout_and_exchange<'a>(&mut self, peers: impl IntoIterator<Item = &'a u64>) {
+        let heartbeats = peers.into_iter().flat_map(|id| {
+            let peer = self.network.peers.get_mut(id).unwrap();
+            let timeout = peer.get_heartbeat_timeout();
+            (0..timeout).for_each(|_| { peer.tick(); });
+            peer.read_messages()
+        }).collect::<Vec<_>>();
+
+        self.network.dispatch(heartbeats.clone());
+        let responses = heartbeats.iter()
+            .map(|v| v.get_to())
+            .flat_map(|id| self.network.peers.get_mut(&id).unwrap().read_messages())
+            .collect::<Vec<_>>();
+        self.network.dispatch(responses);
     }
 }
 

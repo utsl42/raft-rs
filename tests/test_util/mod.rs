@@ -279,8 +279,8 @@ impl Network {
         self.ignorem.insert(t, true);
     }
 
-    pub fn filter(&self, mut msgs: Vec<Message>) -> Vec<Message> {
-        msgs.drain(..)
+    pub fn filter(&self, mut msgs: impl IntoIterator<Item=Message>) -> Vec<Message> {
+        msgs.into_iter()
             .filter(|m| {
                 if self
                     .ignorem
@@ -322,7 +322,7 @@ impl Network {
     /// Dispatches the given messages to the appropriate peers.
     /// Unlike `send` this does not gather and send any responses.
     pub fn dispatch(&mut self, messages: impl IntoIterator<Item=Message>) -> Result<()> {
-        for message in messages {
+        for message in self.filter(messages) {
             let to = message.get_to();
             let peer = self.peers.get_mut(&to).unwrap();
             peer.step(message)?;
