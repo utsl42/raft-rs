@@ -1058,26 +1058,6 @@ impl<T: Storage> Raft<T> {
                     self.send(to_send);
                 }
             }
-            // Set Nodes calls, part of Joint Consensus, require the node to act on an entry as soon as it sees it, instead of at commit time. Since they are replicated by append, we must check here.
-            MessageType::MsgAppend => {
-                self.maybe_handle_set_nodes(&m)?;
-                // Otherwise proceed as normal.
-                match self.state {
-                    StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
-                    StateRole::Follower => self.step_follower(m)?,
-                    StateRole::Leader => self.step_leader(m)?,
-                }
-            }
-            MessageType::MsgPropose => {
-                // TODO: Make sure the leader only assumes this state when it begins replicating the log.
-                self.maybe_handle_set_nodes(&m)?;
-                // Otherwise proceed as normal.
-                match self.state {
-                    StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
-                    StateRole::Follower => self.step_follower(m)?,
-                    StateRole::Leader => self.step_leader(m)?,
-                }
-            }
             _ => match self.state {
                 StateRole::PreCandidate | StateRole::Candidate => self.step_candidate(m)?,
                 StateRole::Follower => self.step_follower(m)?,
@@ -1087,38 +1067,72 @@ impl<T: Storage> Raft<T> {
         Ok(())
     }
 
+    /// Called to apply a `BeginSetNodes` entry.
+    ///
+    ///
+    /// When a Raft node applies this variant of a configuration change it will adopt a joint configuration state until the membership change is finalized.
+    ///
+    /// During this time the `Raft` will have two, possibly overlapping, cooperating quorums for both elections and log replication.
+    ///
+    /// # Implementation notes
+    ///
+    /// This uses a slightly modified "Joint Consensus" algorithm as detailed in Section 6 of the Raft paper.
+    ///
+    /// The modification is as follows: We apply the change when a node *applies* the entry, not when the entry is received.
+    ///
+    /// # Panics
+    ///
+    /// This **must** only be called on `Entry` which holds an `Entry` of with `EntryType::ConfChange` and the `data` field being a serialized `ConfChange`.
+    ///
+    /// This `ConfChange` must be of variant `BeginSetNodes` and contain a `configuration` value.
+    // TODO: Make this return a result.
     #[inline(always)]
-    fn maybe_handle_set_nodes(&mut self, m: &Message) -> Result<()> {
+    pub fn begin_membership_change(&mut self, mut entry: &Entry) -> Result<()> {
+        // TODO: Check if this should be rejected for normal reasons.
+        // Notably, if another is happening now.
+        warn!(
+            "Got begin set nodes on {}, idx {}",
+            self.id,
+            entry.get_index()
+        );
+        assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
+        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+        assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginSetNodes);
+        let configuration = conf_change.get_configuration();
+        self.began_set_nodes_at = Some(self.raft_log.last_index() + 1);
+        self.mut_prs().begin_config_transition(configuration)?;
+        Ok(())
+    }
+
+    /// Called to apply a `CommitSetNodes` entry.
+    ///
+    ///
+    /// When a Raft node applies this variant of a configuration change it will finalize the transition begun by [`begin_membership_change`]
+    ///
+    /// Once this is called the Raft will no longer have two, possibly overlapping, cooperating qourums.
+    ///
+    /// # Implementation notes
+    ///
+    /// This uses a slightly modified "Joint Consensus" algorithm as detailed in Section 6 of the Raft paper.
+    ///
+    /// The modification is as follows: We apply the change when a node *applies* the entry, not when the entry is received.
+    ///
+    /// # Panics
+    ///
+    /// This **must** only be called on `Entry` which holds an `Entry` of with `EntryType::ConfChange` and the `data` field being a serialized `ConfChange`.
+    ///
+    /// This `ConfChange` must be of variant `CommitSetNodes` and contain no `configuration` value.
+    // TODO: Make this return a result.
+    #[inline(always)]
+    pub fn finalize_membership_change(&mut self, mut entry: &Entry) -> Result<()> {
         // TODO: Check if this should be rejected for normal reasons.
         // Notably, if another is happening now.
 
-        // This codepath will be checked often, so keep it fast.
-        if let Some(entry) = m.get_entries().first() {
-            if entry.get_entry_type() == EntryType::EntryConfChange {
-                // If the change is a `SetNodes` we need to apply the change right away.
-                let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-
-                if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
-                    warn!(
-                        "Got begin set nodes on {}, idx {}",
-                        self.id,
-                        entry.get_index()
-                    );
-                    let configuration = conf_change.get_configuration();
-                    self.began_set_nodes_at = Some(self.raft_log.last_index() + 1);
-                    self.mut_prs().begin_config_transition(configuration)?;
-                // if self.state == StateRole::Leader {
-                //     let mut entries = Vec::from(m.get_entries());
-                //     self.append_entry(&mut entries);
-                //     self.bcast_append();
-                //     self.pending_conf_index = self.raft_log.last_index();
-                // }
-                } else if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
-                    warn!("Got commit set nodes on {}", self.id);
-                    self.mut_prs().commit_config_transition()?;
-                }
-            }
-        }
+        warn!("Got commit set nodes on {}", self.id);
+        assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
+        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+        assert_eq!(conf_change.get_change_type(), ConfChangeType::CommitSetNodes);
+        self.mut_prs().commit_config_transition()?;
         Ok(())
     }
 

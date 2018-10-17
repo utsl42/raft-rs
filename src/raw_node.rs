@@ -382,6 +382,7 @@ impl<T: Storage> RawNode<T> {
 
     /// HasReady called when RawNode user need to check if any Ready pending.
     /// Checking logic in this method should be consistent with Ready.containsUpdates().
+    #[inline]
     pub fn has_ready(&self) -> bool {
         self.has_ready_since(None)
     }
@@ -396,7 +397,6 @@ impl<T: Storage> RawNode<T> {
     /// last Ready results.
     pub fn advance(&mut self, rd: Ready) {
         self.advance_append(rd);
-
         let commit_idx = self.prev_hs.get_commit();
         if commit_idx != 0 {
             // In most cases, prevHardSt and rd.HardState will be the same
@@ -413,16 +413,19 @@ impl<T: Storage> RawNode<T> {
     }
 
     /// Appends and commits the ready value.
+    #[inline]
     pub fn advance_append(&mut self, rd: Ready) {
         self.commit_ready(rd);
     }
 
     /// Advance apply to the passed index.
+    #[inline]
     pub fn advance_apply(&mut self, applied: u64) {
         self.commit_apply(applied);
     }
 
     /// Status returns the current status of the given group.
+    #[inline]
     pub fn status(&self) -> Status {
         Status::new(&self.raft)
     }
