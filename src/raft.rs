@@ -1099,7 +1099,8 @@ impl<T: Storage> Raft<T> {
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
         assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginSetNodes);
         let configuration = conf_change.get_configuration();
-        self.began_set_nodes_at = Some(self.raft_log.last_index() + 1);
+        self.began_set_nodes_at = Some(entry.get_index());
+        error!("BEGAN SET NODES AT {:?}", self.began_set_nodes_at);
         self.mut_prs().begin_config_transition(configuration)?;
         Ok(())
     }

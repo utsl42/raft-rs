@@ -18,15 +18,20 @@ use raft::{
     storage::MemStorage,
     Config, ProgressSet, Raft, Result,
 };
-use protobuf;
+use protobuf::{self, RepeatedField};
 use test_util::{setup_for_test, Interface, Network};
 
-fn begin_entry<'a>(voters: impl IntoIterator<Item= &'a u64>, learners: impl IntoIterator<Item = &'a u64>, index: u64) -> Entry {
+fn conf_state<'a>(voters: impl IntoIterator<Item= &'a u64>, learners: impl IntoIterator<Item = &'a u64>) -> ConfState {
     let voters = voters.into_iter().cloned().collect::<Vec<_>>();
     let learners = learners.into_iter().cloned().collect::<Vec<_>>();
     let mut conf_state = ConfState::new();
     conf_state.set_nodes(voters);
     conf_state.set_learners(learners);
+    conf_state
+}
+
+fn begin_entry<'a>(voters: impl IntoIterator<Item= &'a u64>, learners: impl IntoIterator<Item = &'a u64>, index: u64) -> Entry {
+    let conf_state = conf_state(voters, learners);
     let mut conf_change = ConfChange::new();
     conf_change.set_change_type(ConfChangeType::BeginSetNodes);
     conf_change.set_configuration(conf_state);
@@ -49,6 +54,20 @@ fn finalize_entry(index: u64) -> Entry {
     entry
 }
 
+fn propose_change_message<'a>(recipient: u64, voters: impl IntoIterator<Item= &'a u64>, learners: impl IntoIterator<Item = &'a u64>, index: u64) -> Message {
+    let mut begin_entry = begin_entry(voters, learners, index);
+    let mut message = Message::new();
+    message.set_to(recipient);
+    message.set_msg_type(MessageType::MsgPropose);
+    message.set_index(index);
+    message.set_entries(RepeatedField::from_vec(vec![begin_entry]));
+    message
+}
+
+// Test that the API itself works.
+//
+// * Errors are returned from misuse.
+// * Happy path returns happy values.
 mod api {
     use super::*;
     // Test that the cluster can transition from a single node to a whole cluster.
@@ -118,9 +137,70 @@ mod api {
     }
 }
 
+// Test that a single peer is able to progress into a cluster.
+mod single_to_cluster {
+    use super::*;
+    // In a steady state transition should proceed without issue.
+    #[test]
+    fn stable() -> Result<()> {
+        setup_for_test();
+        let mut network = Network::new(vec![None]);
+        network.peers.get_mut(&1).unwrap().become_candidate();
+        network.peers.get_mut(&1).unwrap().become_leader();
+        let propose_message = propose_change_message(
+            1,
+            &[1, 2, 3],
+            &[4],
+            network.peers[&1].raft_log.last_index() + 1
+        );
+        network.send(vec![propose_message]);
+
+        // Initialize the new Rafts.
+        for id in 2..=4 {
+            let storage = MemStorage::new();
+            network.peers.insert(id, Interface::new(Raft::new(&Config {
+                id: id,
+                peers: vec![1],
+                learners: vec![],
+                ..Default::default()
+            }, storage.clone())?));
+        }
+        // Advance each node.
+        for id in 1..=3 {
+            let peer = network.peers.get_mut(&id).unwrap();
+            // Simulate the user advancing.
+            if let Some(entries) = peer.raft_log.next_entries() {
+                for entry in entries {
+                    if entry.get_entry_type() == EntryType::EntryConfChange {
+                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+                        if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
+                            peer.begin_membership_change(&entry)?;
+                        }
+                    }
+                    // Normally done by `advance()`.
+                    peer.raft_log.applied_to(entry.get_index());
+                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
+                    peer.tick();
+                }
+            }
+        }
+
+        // Spur the leader into a heartbeat, this way it can see the nodes have applied the entry.
+        // let ticks = network.peers.get_mut(&1).unwrap().get_heartbeat_timeout();
+        // for tick in 0..=ticks {
+        //     network.peers.get_mut(&1).unwrap().tick();
+        // }
+
+        // Send around the heartbeat.
+        let messages = network.read_messages();
+        network.send(messages);
+        
+        Ok(())
+    }
+}
+
 //mod single_to_cluster {
 //    use super::*;
-    
 //    #[test]
 //    fn stable() -> Result<()> {
 //        setup_for_test();
