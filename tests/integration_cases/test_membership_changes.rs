@@ -19,7 +19,7 @@ use raft::{
     Config, ProgressSet, Raft, Result,
 };
 use protobuf::{self, RepeatedField};
-use test_util::{setup_for_test, Interface, Network};
+use test_util::{setup_for_test, Interface, Network, new_message};
 
 fn conf_state<'a>(voters: impl IntoIterator<Item= &'a u64>, learners: impl IntoIterator<Item = &'a u64>) -> ConfState {
     let voters = voters.into_iter().cloned().collect::<Vec<_>>();
@@ -138,63 +138,147 @@ mod api {
 }
 
 // Test that a single peer is able to progress into a cluster.
-mod single_to_cluster {
+mod three_peers_add_voter {
     use super::*;
     // In a steady state transition should proceed without issue.
     #[test]
     fn stable() -> Result<()> {
         setup_for_test();
-        let mut network = Network::new(vec![None]);
+        let mut network = Network::new(vec![None, None, None]);
         network.peers.get_mut(&1).unwrap().become_candidate();
         network.peers.get_mut(&1).unwrap().become_leader();
-        let propose_message = propose_change_message(
-            1,
-            &[1, 2, 3],
-            &[4],
-            network.peers[&1].raft_log.last_index() + 1
-        );
-        network.send(vec![propose_message]);
 
-        // Initialize the new Rafts.
-        for id in 2..=4 {
+        debug!("Initializing the new Rafts.");
+        for id in 4..=4 {
             let storage = MemStorage::new();
             network.peers.insert(id, Interface::new(Raft::new(&Config {
                 id: id,
-                peers: vec![1],
+                peers: vec![1, id],
                 learners: vec![],
                 ..Default::default()
             }, storage.clone())?));
         }
-        // Advance each node.
+
+        debug!("Proposing a change");
+        let propose_message = propose_change_message(
+            1,
+            &[1, 2, 3, 4],
+            &[],
+            network.peers[&1].raft_log.last_index() + 1
+        );
+        network.send(vec![propose_message]);
+        
+        debug!("Advancing existing peers");
         for id in 1..=3 {
+            let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
-            // Simulate the user advancing.
+            debug!("Simulating the user advancing peer {}.", peer.id);
             if let Some(entries) = peer.raft_log.next_entries() {
-                for entry in entries {
+                for entry in &entries {
                     if entry.get_entry_type() == EntryType::EntryConfChange {
                         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
                         if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
+                            found = true;
                             peer.begin_membership_change(&entry)?;
                         }
                     }
                     // Normally done by `advance()`.
-                    peer.raft_log.applied_to(entry.get_index());
+                    peer.mut_store().wl().append(&entries).unwrap();
                     peer.raft_log.stable_to(entry.get_index(), entry.get_term());
+                    peer.raft_log.commit_to(entry.get_index());
+                    peer.raft_log.applied_to(entry.get_index());
                     peer.tick();
                 }
-            }
+                assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
+            } else { panic!("Didn't have any entries {}", id); }
         }
 
-        // Spur the leader into a heartbeat, this way it can see the nodes have applied the entry.
+        debug!("Verifying existing peers are now transitioning.");
+        for peer in 1..=3 {
+            assert_eq!(network.peers[&peer].prs().is_in_transition(), true, "Peer {} is not in transition. Should be.", peer);
+        }
+
+        debug!("New peer is caught up.");
+        network.isolate(2);
+        network.isolate(3);
+        let messages = network.peers.get_mut(&1).unwrap().read_messages();
+        network.send(messages);
+
+        debug!("New node applying begin.");
+        for id in 4..=4 {
+            let mut found = false;
+            let peer = network.peers.get_mut(&id).unwrap();
+            debug!("Simulating the user advancing peer {}.", peer.id);
+            if let Some(entries) = peer.raft_log.next_entries() {
+                for entry in &entries {
+                    if entry.get_entry_type() == EntryType::EntryConfChange {
+                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+                        if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
+                            found = true;
+                            peer.begin_membership_change(&entry)?;
+                        }
+                    }
+                    // Normally done by `advance()`.
+                    peer.mut_store().wl().append(&entries).unwrap();
+                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
+                    peer.raft_log.commit_to(entry.get_index());
+                    peer.raft_log.applied_to(entry.get_index());
+                    peer.tick();
+                }
+                assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
+            } else { panic!("Didn't have any entries {}", id); }
+        }
+        network.recover();
+        for peer in 2..=4 {
+            let messages = network.peers.get_mut(&peer).unwrap().read_messages();
+            network.send(messages);
+        }
+
+        let messages = network.peers.get_mut(&4).unwrap().read_messages();
+        network.send(messages);
+        debug!("Verifying followers are still transitioning.");
+        for peer in 2..=4 {
+            assert_eq!(network.peers[&peer].prs().is_in_transition(), true, "Peer {} is not in transition. Should be.", peer);
+        }
+        assert_eq!(network.peers[&1].prs().is_in_transition(), false, "Peer {} is in transition. Should not be.", 1);
+
+        debug!("Leader begins actively replicating");
+        // this way it can see the nodes have applied the entry.
         // let ticks = network.peers.get_mut(&1).unwrap().get_heartbeat_timeout();
         // for tick in 0..=ticks {
         //     network.peers.get_mut(&1).unwrap().tick();
         // }
-
-        // Send around the heartbeat.
         let messages = network.read_messages();
         network.send(messages);
+
+        debug!("Applying finalize entry");
+        for id in 2..=4 {
+            let mut found = false;
+            let peer = network.peers.get_mut(&id).unwrap();
+            debug!("Simulating the user advancing peer {}.", peer.id);
+            if let Some(entries) = peer.raft_log.next_entries() {
+                for entry in &entries {
+                    if entry.get_entry_type() == EntryType::EntryConfChange {
+                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+                        if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
+                            found = true;
+                            peer.finalize_membership_change(&entry)?;
+                        }
+                    }
+                    // Normally done by `advance()`.
+                    peer.mut_store().wl().append(&entries).unwrap();
+                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
+                    peer.raft_log.commit_to(entry.get_index());
+                    peer.raft_log.applied_to(entry.get_index());
+                    peer.tick();
+                }
+                assert!(found, "Finalize message not found for peer {}. Got: {:?}", id, entries);
+            } else { panic!("Didn't have any entries {}", id); }
+        }
         
+
+        
+
         Ok(())
     }
 }

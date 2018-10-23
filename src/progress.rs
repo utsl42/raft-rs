@@ -500,10 +500,14 @@ impl ProgressSet {
             Err(Error::Exists(demoted, "learners"))?;
         }
         debug!("Beginning member configuration transition. End state will be voters {:?}, Learners: {:?}", next.voters, next.learners);
+        // TODO: Fill ins_size with correct value.
+        let mut new_progress = Progress::new(3, 10);
+        // When a node is first added/promoted, we should mark it as recently active.
+        // Otherwise, check_quorum may cause us to step down if it is invoked
+        // before the added node has a chance to commuicate with us.
+        new_progress.recent_active = true;
         for id in next.voters.iter().chain(&next.learners) {
-            // TODO: Fill ins_size with correct value.
-            let new_progress = Progress::new(1, 10);
-            self.progress.entry(*id).or_insert_with(|| new_progress);
+            self.progress.entry(*id).or_insert_with(|| new_progress.clone());
         }
         self.next_configuration = Some(next);
         // Now we create progresses for any that do not exist.

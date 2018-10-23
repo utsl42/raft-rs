@@ -652,12 +652,15 @@ impl<T: Storage> Raft<T> {
 
     ///maybe_commit Returns true to indicate that there will probably be some readiness need to be handled.
     pub fn tick(&mut self) -> bool {
-        match self.state {
+        trace!("{} enter tick()", self.id);
+        let result = match self.state {
             StateRole::Follower | StateRole::PreCandidate | StateRole::Candidate => {
                 self.tick_election()
             }
             StateRole::Leader => self.tick_heartbeat(),
-        }
+        };
+        trace!("{} exit tick()", self.id);
+        result
     }
 
     // TODO: revoke pub when there is a better way to test.
@@ -1088,25 +1091,28 @@ impl<T: Storage> Raft<T> {
     // TODO: Make this return a result.
     #[inline(always)]
     pub fn begin_membership_change(&mut self, mut entry: &Entry) -> Result<()> {
+        trace!(
+            "{} enter begin_membership_change(entry: {:?})",
+            self.id,
+            entry
+        );
         // TODO: Check if this should be rejected for normal reasons.
         // Notably, if another is happening now.
-        warn!(
-            "Got begin set nodes on {}, idx {}",
-            self.id,
-            entry.get_index()
-        );
         assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
         assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginSetNodes);
         let configuration = conf_change.get_configuration();
         self.began_set_nodes_at = Some(entry.get_index());
-        error!("BEGAN SET NODES AT {:?}", self.began_set_nodes_at);
         self.mut_prs().begin_config_transition(configuration)?;
+        trace!(
+            "{} exit begin_membership_change(entry: {:?})",
+            self.id,
+            entry
+        );
         Ok(())
     }
 
     /// Called to apply a `CommitSetNodes` entry.
-    ///
     ///
     /// When a Raft node applies this variant of a configuration change it will finalize the transition begun by [`begin_membership_change`]
     ///
@@ -1126,14 +1132,23 @@ impl<T: Storage> Raft<T> {
     // TODO: Make this return a result.
     #[inline(always)]
     pub fn finalize_membership_change(&mut self, mut entry: &Entry) -> Result<()> {
+        trace!(
+            "{} enter finalize_membership_change(entry: {:?})",
+            self.id,
+            entry
+        );
         // TODO: Check if this should be rejected for normal reasons.
         // Notably, if another is happening now.
 
-        warn!("Got commit set nodes on {}", self.id);
         assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
         assert_eq!(conf_change.get_change_type(), ConfChangeType::CommitSetNodes);
         self.mut_prs().commit_config_transition()?;
+        trace!(
+            "{} exit finalize_membership_change(entry: {:?})",
+            self.id,
+            entry
+        );
         Ok(())
     }
 
@@ -1199,7 +1214,7 @@ impl<T: Storage> Raft<T> {
                 if pr.state == ProgressState::Replicate {
                     pr.become_probe();
                 }
-                *send_append = true;
+               *send_append = true;
             }
             return;
         }
@@ -1249,6 +1264,7 @@ impl<T: Storage> Raft<T> {
         send_append: &mut bool,
         more_to_send: &mut Option<Message>,
     ) {
+        trace!("{} enter handle_heartbeat_response(m: {:?}, prs: ..., send_append: {:?}, more_to_send: {:?}", self.id, m, send_append, more_to_send);
         // Update the node. Drop the value explicitly since we'll check the qourum after.
         {
             let pr = prs.get_mut(m.get_from()).unwrap();
@@ -1259,16 +1275,20 @@ impl<T: Storage> Raft<T> {
             if pr.state == ProgressState::Replicate && pr.ins.full() {
                 pr.ins.free_first_one();
             }
-            if pr.matched < self.raft_log.last_index() {
+            // if pr.matched < self.raft_log.last_index() {
                 *send_append = true;
-            }
+            // }
 
             if self.read_only.option != ReadOnlyOption::Safe || m.get_context().is_empty() {
+                debug!("Early exit due to read_only being not Safe (is {:?}), or no context. (is {:?})", self.read_only.option, m.get_context());
+                trace!("{} exit handle_heartbeat_response(m: {:?}, prs: ..., send_append: {:?}, more_to_send: {:?}", self.id, m, send_append, more_to_send);
                 return;
             }
         }
 
         if !prs.has_quorum(&self.read_only.recv_ack(m)) {
+            debug!("Early exit due to !has_quorum");
+            trace!("{} exit handle_heartbeat_response(m: {:?}, prs: ..., send_append: {:?}, more_to_send: {:?}", self.id, m, send_append, more_to_send);
             return;
         }
 
@@ -1291,6 +1311,7 @@ impl<T: Storage> Raft<T> {
                 *more_to_send = Some(to_send);
             }
         }
+        trace!("{} exit handle_heartbeat_response(m: {:?}, prs: ..., send_append: {:?}, more_to_send: {:?}", self.id, m, send_append, more_to_send);
     }
 
     fn handle_transfer_leader(&mut self, m: &Message, pr: &mut Progress) {
