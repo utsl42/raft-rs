@@ -578,19 +578,36 @@ impl<T: Storage> Raft<T> {
     /// Attempts to advance the commit index. Returns true if the commit index
     /// changed (in which case the caller should call `r.bcast_append`).
     pub fn maybe_commit(&mut self) -> bool {
+        trace!("Enter maybe_commit()");
         let mci = self.prs().minimum_committed_index();
+        let result = self.raft_log.maybe_commit(mci, self.term);
+        trace!("Exit maybe_commit()");
+        result
+    }
+
+    /// Commit that the Raft peer has applied up to the given index.
+    /// 
+    /// Registers the new applied index to the Raft log, then checks to see if it's time to finalize a Joint Consensus state.
+    pub fn commit_apply(&mut self, applied: u64) {
+        trace!("{:?}, Enter commit_apply(applied: {:?})", self.id, applied);
+        #[allow(deprecated)]
+        self.raft_log.applied_to(applied);
+
+        // Check to see if we need to finalize a Joint Consensus state now.
         if let Some(index) = self.began_set_nodes_at {
-            if mci >= index {
+            // Invariant: We know that if we have commited past some index, we can also commit that index.
+            if applied >= index {
+                // Ensure we reset this on *any* node, since the leader might have failed
+                // and we don't want to finalize twice.
                 self.began_set_nodes_at = None;
-                // We changed the config already in handle_set_nodes.
                 if self.state == StateRole::Leader {
                     // We must replicate the commit entry.
-                    self.mut_prs().commit_config_transition().unwrap();
+                    self.mut_prs().commit_config_transition().expect("Appending the FinalizeSetNodes command should never fail. This is a bug, please report this.");
                     self.append_commit_set_nodes();
                 }
             }
         }
-        self.raft_log.maybe_commit(mci, self.term)
+        trace!("Exit commit_apply(applied: {:?})", applied);
     }
 
     fn append_commit_set_nodes(&mut self) {
@@ -600,6 +617,7 @@ impl<T: Storage> Raft<T> {
         let mut entry = Entry::new();
         entry.set_entry_type(EntryType::EntryConfChange);
         entry.set_data(data);
+        // Index/Term set here.
         self.append_entry(&mut [entry]);
         self.bcast_append();
     }

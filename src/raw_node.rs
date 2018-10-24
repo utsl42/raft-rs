@@ -255,7 +255,7 @@ impl<T: Storage> RawNode<T> {
     }
 
     fn commit_apply(&mut self, applied: u64) {
-        self.raft.raft_log.applied_to(applied);
+        self.raft.commit_apply(applied);
     }
 
     /// Tick advances the internal logical clock by a single tick.

@@ -260,6 +260,7 @@ impl<T: Storage> RaftLog<T> {
     /// # Panics
     ///
     /// Panics if the value passed in is not new or known.
+    #[deprecated = "Call raft::commit_apply instead. Joint Consensus requires an on-apply hook to finalize a configuration change."]
     pub fn applied_to(&mut self, idx: u64) {
         if idx == 0 {
             return;

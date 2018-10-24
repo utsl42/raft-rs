@@ -523,7 +523,7 @@ impl ProgressSet {
         match next {
             None => Err(Error::NoPendingTransition)?,
             Some(next) => {
-                debug!("Commiting member configration transition. State is now voters {:?}, Learners: {:?}", next.voters, next.learners);
+                debug!("Inserted finalize member configration transition command. State will be {:?}, Learners: {:?}", next.voters, next.learners);
                 self.configuration = next;
             }
         }
