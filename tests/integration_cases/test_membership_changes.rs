@@ -16,9 +16,10 @@ use fxhash::FxHashSet;
 use raft::{
     eraftpb::{ConfState, Entry, EntryType, ConfChange, ConfChangeType, Message, MessageType},
     storage::MemStorage,
-    Config, ProgressSet, Raft, StateRole, Result,
+    Config, ProgressSet, Configuration, Raft, StateRole, Result,
 };
 use protobuf::{self, RepeatedField};
+use std::ops::{Deref, DerefMut};
 use test_util::{setup_for_test, Interface, Network, new_message};
 
 fn conf_state<'a>(voters: impl IntoIterator<Item= &'a u64>, learners: impl IntoIterator<Item = &'a u64>) -> ConfState {
@@ -350,6 +351,81 @@ mod three_peer_cluster_adds_voter {
             assert_eq!(!network.peers[&peer].prs().is_in_transition(), true, "Peer {} is in transition. Should not be.", peer);
         }
 
+        Ok(())
+    }
+}
+
+struct Scenario {
+    leader: u64,
+    old_configuration: Configuration,
+    new_configuration: Configuration,
+    network: Network,
+}
+impl Deref for Scenario {
+    type Target = Network;
+    fn deref(&self) -> &Network {
+        &self.network
+    }
+}
+impl DerefMut for Scenario {
+    fn deref_mut(&mut self) -> &mut Network {
+        &mut self.network
+    }
+}
+
+impl Scenario {
+    fn new(leader: u64, old_configuration: Configuration, new_configuration: Configuration) {
+        old_configuration
+        Scenario {
+            leader,
+            old_configuration,
+            new_configuration,
+            network: Network::new
+        }
+
+    }
+    fn assert_not_in_transition<'a>(&self, peers: impl IntoIterator<Item= &'a u64>) {
+        for peer in peers.into_iter().map(|id| self.network.peers.get(id).unwrap()) {
+            assert!(!peer.is_in_transition(), "Peer {} should not have been in transition.");
+        }
+    }
+    fn assert_in_transition<'a>(&self, peers: impl IntoIterator<Item= &'a u64>) {
+        for peer in peers.into_iter().map(|id| self.network.peers.get(id).unwrap()) {
+            assert!(peer.is_in_transition(), "Peer {} should have been in transition.");
+        }
+    }
+    fn already_existing_nodes(&self) -> impl Iterator<Item = &u64>
+
+    fn expect_and_apply_transition_entry<'a>(&mut self, peers: impl IntoIterator<Item = &'a u64>, entry_type: ConfChangeType) -> Result<()> {
+        for peer in peers.into_iter() {
+            debug!("Advancing peer {}, expecting a {:?} entry.", peer, entry_type);
+            let peer = self.network.peers.get_mut(peer).unwrap();
+            if let Some(entries) = peer.raft_log.next_entries() {
+                peer.mut_store().wl().append(&entries).unwrap();
+                let mut found = false;
+                for entry in &entries {
+                    if entry.get_entry_type() == EntryType::EntryConfChange {
+                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
+                        if conf_change.get_change_type() == entry_type {
+                            found = true;
+                            if entry_type == ConfChangeType::BeginSetNodes {
+                                peer.begin_membership_change(&entry)?;
+                            } else {
+                                peer.finalize_membership_change(&entry)?;
+                            }
+                        }
+                    }
+                    if found {
+                        peer.raft_log.stable_to(entry.get_index(), entry.get_term());
+                        peer.raft_log.commit_to(entry.get_index());
+                        peer.commit_apply(entry.get_index());
+                        peer.tick();
+                    }
+                }
+                assert!(found, "Begin message not found for peer {}. Got: {:?}", peer.id, entries);
+                found = false;
+            } else { panic!("Didn't have any entries {}", peer.id); }
+        }
         Ok(())
     }
 }

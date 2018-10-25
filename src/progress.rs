@@ -54,12 +54,16 @@ impl Default for ProgressState {
 }
 
 #[derive(Clone, Debug, Default)]
+/// A Raft internal representation of a Configuration. This is corallary to a ConfState, but optimized for `contains` calls.
 pub struct Configuration {
+    /// The voter set.
     pub voters: FxHashSet<u64>,
+    /// The learner set.
     pub learners: FxHashSet<u64>,
 }
 
 impl Configuration {
+    /// Create a new configuration with the given configuration.
     pub fn new(
         voters: impl IntoIterator<Item = u64>,
         learners: impl IntoIterator<Item = u64>,
@@ -97,11 +101,11 @@ impl Configuration {
         }
     }
 
-    // Validates that the configuration not problematic.
-    //
-    // Namely:
-    // * There can be no overlap of voters and learners.
-    // * There must be at least one voter.
+    /// Validates that the configuration not problematic.
+    ///
+    /// Namely:
+    /// * There can be no overlap of voters and learners.
+    /// * There must be at least one voter.
     pub fn valid(&self) -> Result<(), Error> {
         if let Some(id) = self.voters.intersection(&self.learners).next() {
             Err(Error::Exists(*id, "learners"))?;

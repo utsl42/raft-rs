@@ -2172,4 +2172,9 @@ impl<T: Storage> Raft<T> {
     pub fn abort_leader_transfer(&mut self) {
         self.lead_transferee = None;
     }
+
+    /// Determine if the Raft is in a transition state under Joint Consensus.
+    pub fn is_in_transition(&self) -> bool {
+        self.prs().is_in_transition()
+    }
 }
