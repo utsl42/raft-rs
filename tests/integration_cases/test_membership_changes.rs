@@ -141,8 +141,7 @@ mod api {
 mod three_peer_cluster_adds_voter {
     use super::*;
     
-    #[test]
-    // In a steady state transition should proceed without issue.
+    /// In a steady state transition should proceed without issue.
     #[test]
     fn stable() -> Result<()> {
         setup_for_test();
@@ -151,7 +150,7 @@ mod three_peer_cluster_adds_voter {
         let message = new_message(1, 1, MessageType::MsgHup, 0);
         network.send(vec![message]);
 
-        debug!("Initializing the new Rafts.");
+        info!("Initializing the new Rafts.");
         for id in 4..=4 {
             let storage = MemStorage::new();
             network.peers.insert(id, Interface::new(Raft::new(&Config {
@@ -162,7 +161,7 @@ mod three_peer_cluster_adds_voter {
             }, storage.clone())?));
         }
 
-        debug!("Proposing a change");
+        info!("Proposing a change");
         let propose_message = propose_change_message(
             1,
             &[1, 2, 3, 4],
@@ -171,16 +170,16 @@ mod three_peer_cluster_adds_voter {
         );
         network.dispatch(vec![propose_message]);
 
-        // Step the clsuter.
-        // Leader sends first append...
+        info!("Step the clsuter. First, the leader sends appends...");
         let messages = network.peers.get_mut(&1).unwrap().read_messages();
-        network.dispatch(messages);
-        // The followers respond.
+        network.dispatch(messages)?;
+        info!("After, the followers respond.");
         let messages = network.peers.get_mut(&2).unwrap().read_messages();
-        network.dispatch(messages);
+        network.dispatch(messages)?;
         let messages = network.peers.get_mut(&3).unwrap().read_messages();
-        network.dispatch(messages);
-        debug!("Advancing leader, now in joint");
+        network.dispatch(messages)?;
+
+        info!("Advancing leader, now in joint");
         for id in 1..=1 {
             let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
@@ -209,12 +208,11 @@ mod three_peer_cluster_adds_voter {
         
         // At this point, the leader has committed the Begin log.
         // Now the leader will inform the followers of the commit.
-        debug!("Leader distributes confirmation of the commit. Finalize as well, since they're immediately after one another in the log.");
+        info!("Leader distributes confirmation of the commit. Finalize as well, since they're immediately after one another in the log.");
         let messages = network.peers.get_mut(&1).unwrap().read_messages();
-        println!("{:#?}", messages);
-        network.dispatch(messages);
+        network.dispatch(messages)?;
         
-        debug!("Advancing old follower configuration, now in joint");
+        info!("Advancing old follower configuration, now in joint");
         for id in 2..=3 {
             let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
@@ -259,16 +257,16 @@ mod three_peer_cluster_adds_voter {
         // network.dispatch(messages);
 
         // New follower gets initialized.
-        debug!("Allowing NEW peers to catch up");
+        info!("Allowing NEW peers to catch up");
         // We are essentially "isolating" these two to make it easier.
         for _ in 1..4 {
             let messages = network.peers.get_mut(&1).unwrap().read_messages();
-            network.dispatch(messages);
+            network.dispatch(messages)?;
             let messages = network.peers.get_mut(&4).unwrap().read_messages();
-            network.dispatch(messages);
+            network.dispatch(messages)?;
         }
         
-        debug!("Advancing NEW configuration, now in joint");
+        info!("Advancing NEW configuration, now in joint");
         for id in 4..=4 {
             let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
@@ -302,22 +300,23 @@ mod three_peer_cluster_adds_voter {
         // 
         // By now all followers should be able to commit the Finalize.
         // Check in with the OLD configuration and get any responses they have.
+        info!("Finishing up peer communications.");
         for _ in 1..=2 {
             let messages = network.peers.get_mut(&4).unwrap().read_messages();
-            network.dispatch(messages);
+            network.dispatch(messages)?;
             let messages = network.peers.get_mut(&1).unwrap().read_messages();
-            network.dispatch(messages);
+            network.dispatch(messages)?;
         }
         let messages = network.peers.get_mut(&3).unwrap().read_messages();
-        network.dispatch(messages);
+        network.dispatch(messages)?;
         let messages = network.peers.get_mut(&2).unwrap().read_messages();
-        network.dispatch(messages);
+        network.dispatch(messages)?;
         // Leader informs OLD of commit. NEW still catching up.
         let messages = network.peers.get_mut(&1).unwrap().read_messages();
-        network.dispatch(messages);
+        network.dispatch(messages)?;
         // NEW catches up.
         
-        debug!("Advancing all nodes, now leaving the joint");
+        info!("Advancing all nodes, now leaving the joint");
         for id in 2..=4 {
             let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
@@ -346,7 +345,7 @@ mod three_peer_cluster_adds_voter {
 
 
 
-        debug!("Verifying existing peers are not transitioning.");
+        info!("Verifying existing peers are not transitioning.");
         for peer in 1..=4 {
             assert_eq!(!network.peers[&peer].prs().is_in_transition(), true, "Peer {} is in transition. Should not be.", peer);
         }
