@@ -283,7 +283,7 @@ impl<T: Storage> Raft<T> {
             r.load_state(&rs.hard_state);
         }
         if c.applied > 0 {
-            r.raft_log.applied_to(c.applied);
+            r.commit_apply(c.applied);
         }
         let term = r.term;
         r.become_follower(term, INVALID_ID);
@@ -512,6 +512,7 @@ impl<T: Storage> Raft<T> {
     /// Sends RPC, with entries to the given peer.
     pub fn send_append(&mut self, to: u64, pr: &mut Progress) {
         if pr.is_paused() {
+            trace!("Skipping sending to {}, it's paused. {:?}", to, pr);
             return;
         }
         let term = self.raft_log.term(pr.next_idx - 1);
@@ -520,6 +521,7 @@ impl<T: Storage> Raft<T> {
         m.set_to(to);
         if term.is_err() || ents.is_err() {
             // send snapshot if we failed to get term or entries
+            trace!("Skipping sending to {}, term or ents is_err()", to);
             if !self.prepare_send_snapshot(&mut m, pr, to) {
                 return;
             }
@@ -578,7 +580,7 @@ impl<T: Storage> Raft<T> {
     /// Attempts to advance the commit index. Returns true if the commit index
     /// changed (in which case the caller should call `r.bcast_append`).
     pub fn maybe_commit(&mut self) -> bool {
-        trace!("Enter maybe_commit()");
+        trace!("{} Enter maybe_commit()", self.id);
         let mci = self.prs().minimum_committed_index();
         let result = self.raft_log.maybe_commit(mci, self.term);
         trace!("Exit maybe_commit()");
@@ -1948,7 +1950,8 @@ impl<T: Storage> Raft<T> {
     /// This method can be false positive.
     #[inline]
     pub fn has_pending_conf(&self) -> bool {
-        self.pending_conf_index > self.raft_log.applied
+        self.pending_conf_index > self.raft_log.applied ||
+            self.began_set_nodes_at.is_some()
     }
 
     /// Specifies if the commit should be broadcast.

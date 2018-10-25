@@ -138,7 +138,7 @@ mod api {
 }
 
 // Test that a single peer is able to progress into a cluster.
-mod three_peers_add_voter {
+mod three_peer_cluster_adds_voter {
     use super::*;
     
     #[test]
@@ -199,7 +199,7 @@ mod three_peers_add_voter {
                         peer.raft_log.stable_to(entry.get_index(), entry.get_term());
                         peer.raft_log.commit_to(entry.get_index());
                         peer.commit_apply(entry.get_index());
-                        peer.tick();
+                        // peer.tick();
                     }
                 }
                 assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
@@ -211,15 +211,16 @@ mod three_peers_add_voter {
         // Now the leader will inform the followers of the commit.
         debug!("Leader distributes confirmation of the commit. Finalize as well, since they're immediately after one another in the log.");
         let messages = network.peers.get_mut(&1).unwrap().read_messages();
+        println!("{:#?}", messages);
         network.dispatch(messages);
         
-        debug!("Advancing OLD follower configuration, now in joint");
+        debug!("Advancing old follower configuration, now in joint");
         for id in 2..=3 {
             let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
-            debug!("Simulating the user advancing peer {}.", peer.id);
+            debug!("simulating the user advancing peer {}.", peer.id);
             if let Some(entries) = peer.raft_log.next_entries() {
-                // Normally done by `advance()`.
+                // normally done by `advance()`.
                 peer.mut_store().wl().append(&entries).unwrap();
                 for entry in &entries {
                     if entry.get_entry_type() == EntryType::EntryConfChange {
@@ -233,22 +234,22 @@ mod three_peers_add_voter {
                         peer.raft_log.stable_to(entry.get_index(), entry.get_term());
                         peer.raft_log.commit_to(entry.get_index());
                         peer.commit_apply(entry.get_index());
-                        peer.tick();
+                        // peer.tick();
                     }
                 }
-                assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
+                assert!(found, "begin message not found for peer {}. got: {:?}", id, entries);
                 found = false;
-            } else { panic!("Didn't have any entries {}", id); }
+            } else { panic!("didn't have any entries {}", id); }
         }
         
-        let messages = network.peers.get_mut(&4).unwrap().read_messages();
-        network.dispatch(messages);
-        
-        // Here we validate that the membership list is correct.
-        for peer in 1..=3 {
+        // Here we validate that the membership list is for the OLD is correct.
+        //
+        // With the leader, it will already be exiting the transition, so we only check followers.
+        for peer in 2..=3 {
             let mut voter_set = network.peers[&peer].prs().voter_ids().iter().cloned().collect::<Vec<_>>();
             voter_set.sort();
             assert_eq!(&[1,2,3,4], voter_set.as_slice());
+            assert!(network.peers[&peer].prs().is_in_transition(), "{} should be in transition", peer);
         }
 
         // Now that the new peers are part of the ProgressSet, they need to be caught up.
@@ -275,6 +276,7 @@ mod three_peers_add_voter {
             if let Some(entries) = peer.raft_log.next_entries() {
                 peer.mut_store().wl().append(&entries).unwrap();
                 for entry in &entries {
+                    error!("{:?}", entry);
                     if entry.get_entry_type() == EntryType::EntryConfChange {
                         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
                         if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
@@ -286,12 +288,12 @@ mod three_peers_add_voter {
                         peer.raft_log.stable_to(entry.get_index(), entry.get_term());
                         peer.raft_log.commit_to(entry.get_index());
                         peer.commit_apply(entry.get_index());
-                        peer.tick();
+                        // peer.tick();
                     }
                 }
                 assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
                 found = false;
-            } else { panic!("Didn't have any entries {}", id); }
+            } else { panic!("Didn't have any begin entries {}", id); }
         }
 
         // At this point the leader will have commited the Begin log,
@@ -300,20 +302,22 @@ mod three_peers_add_voter {
         // 
         // By now all followers should be able to commit the Finalize.
         // Check in with the OLD configuration and get any responses they have.
+        for _ in 1..=2 {
+            let messages = network.peers.get_mut(&4).unwrap().read_messages();
+            network.dispatch(messages);
+            let messages = network.peers.get_mut(&1).unwrap().read_messages();
+            network.dispatch(messages);
+        }
         let messages = network.peers.get_mut(&3).unwrap().read_messages();
         network.dispatch(messages);
         let messages = network.peers.get_mut(&2).unwrap().read_messages();
         network.dispatch(messages);
-        // Leader informs OLD of commit. NNEW still catching up.
+        // Leader informs OLD of commit. NEW still catching up.
         let messages = network.peers.get_mut(&1).unwrap().read_messages();
         network.dispatch(messages);
         // NEW catches up.
-        let messages = network.peers.get_mut(&4).unwrap().read_messages();
-        network.dispatch(messages);
-        let messages = network.peers.get_mut(&1).unwrap().read_messages();
-        network.dispatch(messages);
         
-        debug!("Advancing all nodes, now in joint");
+        debug!("Advancing all nodes, now leaving the joint");
         for id in 2..=4 {
             let mut found = false;
             let peer = network.peers.get_mut(&id).unwrap();
@@ -340,140 +344,12 @@ mod three_peers_add_voter {
             } else { panic!("Didn't have any entries {}", id); }
         }
 
-        panic!("x");
 
 
-        debug!("Verifying existing peers are now transitioning.");
-        for peer in 1..=3 {
-            assert_eq!(network.peers[&peer].prs().is_in_transition(), true, "Peer {} is not in transition. Should be.", peer);
+        debug!("Verifying existing peers are not transitioning.");
+        for peer in 1..=4 {
+            assert_eq!(!network.peers[&peer].prs().is_in_transition(), true, "Peer {} is in transition. Should not be.", peer);
         }
-        panic!("here");
-
-        let messages = network.peers.get_mut(&2).unwrap().read_messages();
-        network.dispatch(messages);
-        let messages = network.peers.get_mut(&3).unwrap().read_messages();
-        network.dispatch(messages);
-
-
-        debug!("Allow leader to finalize");
-        for id in 1..=1 {
-            let mut found = false;
-            let peer = network.peers.get_mut(&id).unwrap();
-            debug!("Simulating the user advancing peer {}.", peer.id);
-            if let Some(entries) = peer.raft_log.next_entries() {
-                for entry in &entries {
-                    if entry.get_entry_type() == EntryType::EntryConfChange {
-                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-                        if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
-                            found = true;
-                            peer.finalize_membership_change(&entry)?;
-                        }
-                    }
-                    // Normally done by `advance()`.
-                    peer.mut_store().wl().append(&entries).unwrap();
-                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
-                    peer.raft_log.commit_to(entry.get_index());
-                    peer.raft_log.applied_to(entry.get_index());
-                    peer.tick();
-                }
-                assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
-            } else { panic!("Didn't have any entries {}", id); }
-        }
-
-        debug!("New peer is caught up.");
-        network.isolate(2);
-        network.isolate(3);
-        let messages = network.peers.get_mut(&1).unwrap().read_messages();
-        network.send(messages);
-        network.recover();
-
-        debug!("New node applying begin.");
-        for id in 4..=4 {
-            let mut found = false;
-            let peer = network.peers.get_mut(&id).unwrap();
-            debug!("Simulating the user advancing peer {}.", peer.id);
-            if let Some(entries) = peer.raft_log.next_entries() {
-                for entry in &entries {
-                    if entry.get_entry_type() == EntryType::EntryConfChange {
-                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-                        if conf_change.get_change_type() == ConfChangeType::BeginSetNodes {
-                            found = true;
-                            peer.begin_membership_change(&entry)?;
-                        }
-                    }
-                    // Normally done by `advance()`.
-                    peer.mut_store().wl().append(&entries).unwrap();
-                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
-                    peer.raft_log.commit_to(entry.get_index());
-                    peer.raft_log.applied_to(entry.get_index());
-                    peer.tick();
-                }
-                assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
-            } else { panic!("Didn't have any entries {}", id); }
-        }
-        
-        debug!("Letting peer 4 respond");
-        let messages = network.peers.get_mut(&4).unwrap().read_messages();
-        error!("BLERP {:?}", messages);
-        network.dispatch(messages);
-
-        debug!("Verifying followers are still transitioning.");
-        for peer in 2..=4 {
-            assert_eq!(network.peers[&peer].prs().is_in_transition(), true, "Peer {} is not in transition. Should be.", peer);
-        }
-        assert_eq!(network.peers[&1].prs().is_in_transition(), false, "Peer {} is in transition. Should not be.", 1);
-
-        debug!("Applying finalize on leader");
-        for id in 1..=1 {
-            let mut found = false;
-            let peer = network.peers.get_mut(&id).unwrap();
-            debug!("Simulating the user advancing peer {}.", peer.id);
-            if let Some(entries) = peer.raft_log.next_entries() {
-                for entry in &entries {
-                    if entry.get_entry_type() == EntryType::EntryConfChange {
-                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-                        if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
-                            found = true;
-                            peer.finalize_membership_change(&entry)?;
-                        }
-                    }
-                    // Normally done by `advance()`.
-                    peer.mut_store().wl().append(&entries).unwrap();
-                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
-                    peer.raft_log.commit_to(entry.get_index());
-                    peer.raft_log.applied_to(entry.get_index());
-                    peer.tick();
-                }
-                assert!(found, "Begin message not found for peer {}. Got: {:?}", id, entries);
-            } else { panic!("Didn't have any entries {}", id); }
-        }
-
-        for id in 2..=4 {
-            let mut found = false;
-            let peer = network.peers.get_mut(&id).unwrap();
-            debug!("Simulating the user advancing peer {}.", peer.id);
-            if let Some(entries) = peer.raft_log.next_entries() {
-                for entry in &entries {
-                    if entry.get_entry_type() == EntryType::EntryConfChange {
-                        let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-                        if conf_change.get_change_type() == ConfChangeType::CommitSetNodes {
-                            found = true;
-                            peer.finalize_membership_change(&entry)?;
-                        }
-                    }
-                    // Normally done by `advance()`.
-                    peer.mut_store().wl().append(&entries).unwrap();
-                    peer.raft_log.stable_to(entry.get_index(), entry.get_term());
-                    peer.raft_log.commit_to(entry.get_index());
-                    peer.raft_log.applied_to(entry.get_index());
-                    peer.tick();
-                }
-                assert!(found, "Finalize message not found for peer {}. Got: {:?}", id, entries);
-            } else { panic!("Didn't have any entries {}", id); }
-        }
-        
-
-        
 
         Ok(())
     }

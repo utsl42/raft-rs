@@ -501,13 +501,20 @@ impl ProgressSet {
         }
         debug!("Beginning member configuration transition. End state will be voters {:?}, Learners: {:?}", next.voters, next.learners);
         // TODO: Fill ins_size with correct value.
-        let mut new_progress = Progress::new(3, 10);
+        let mut new_progress = Progress::new(1, 10);
         // When a node is first added/promoted, we should mark it as recently active.
         // Otherwise, check_quorum may cause us to step down if it is invoked
         // before the added node has a chance to commuicate with us.
         new_progress.recent_active = true;
+        new_progress.paused = false;
         for id in next.voters.iter().chain(&next.learners) {
-            self.progress.entry(*id).or_insert_with(|| new_progress.clone());
+            self.progress.entry(*id).or_insert_with(|| {
+                let mut progress = new_progress.clone();
+                // Turns out cloning doesn't copy the vector capacity.
+                // TODO: Real value.
+                progress.ins = Inflights::new(10);
+                progress
+            });
         }
         self.next_configuration = Some(next);
         // Now we create progresses for any that do not exist.
