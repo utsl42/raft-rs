@@ -154,47 +154,23 @@ mod three_peer_cluster_adds_voter {
             (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
             (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
         )?;
-        // Elect the leader.
-        let message = new_message(1, 1, MessageType::MsgHup, 0);
-        scenario.send(vec![message]);
 
         info!("Initializing the new Rafts.");
-        for id in 4..=4 {
-            let storage = MemStorage::new();
-            scenario.peers.insert(id, Interface::new(Raft::new(&Config {
-                id: id,
-                peers: vec![1, id],
-                learners: vec![],
-                ..Default::default()
-            }, storage.clone())?));
-        }
+        scenario.spawn_new_peers()?;
 
         info!("Proposing a change");
-        let propose_message = propose_change_message(
-            1,
-            &[1, 2, 3, 4],
-            &[],
-            scenario.peers[&1].raft_log.last_index() + 1
-        );
-        scenario.dispatch(vec![propose_message]);
+        scenario.propose_change_message()?;
 
         info!("Step the clsuter. First, the leader sends appends...");
-        let messages = scenario.peers.get_mut(&1).unwrap().read_messages();
-        scenario.dispatch(messages)?;
-        info!("After, the followers respond.");
-        let messages = scenario.peers.get_mut(&2).unwrap().read_messages();
-        scenario.dispatch(messages)?;
-        let messages = scenario.peers.get_mut(&3).unwrap().read_messages();
-        scenario.dispatch(messages)?;
+        scenario.read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now in joint");
-        scenario.expect_and_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes);
+        scenario.expect_and_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
         
         // At this point, the leader has committed the Begin log.
         // Now the leader will inform the followers of the commit.
         info!("Leader distributes confirmation of the commit. Finalize as well, since they're immediately after one another in the log.");
-        let messages = scenario.peers.get_mut(&1).unwrap().read_messages();
-        scenario.dispatch(messages)?;
+        scenario.read_and_dispatch_messages_from(&[1]);
         
         info!("Advancing old follower configuration, now in joint");
         scenario.expect_and_apply_transition_entry(&[2, 3], ConfChangeType::BeginSetNodes);
@@ -202,12 +178,7 @@ mod three_peer_cluster_adds_voter {
         // Here we validate that the membership list is for the OLD is correct.
         //
         // With the leader, it will already be exiting the transition, so we only check followers.
-        for peer in 2..=3 {
-            let mut voter_set = scenario.peers[&peer].prs().voter_ids().iter().cloned().collect::<Vec<_>>();
-            voter_set.sort();
-            assert_eq!(&[1,2,3,4], voter_set.as_slice());
-            assert!(scenario.peers[&peer].prs().is_in_transition(), "{} should be in transition", peer);
-        }
+        scenario.assert_in_transition(&[2,3]);
 
         // Now that the new peers are part of the ProgressSet, they need to be caught up.
         // TODO: This should also send finalize.
@@ -216,14 +187,10 @@ mod three_peer_cluster_adds_voter {
         // network.dispatch(messages);
 
         // New follower gets initialized.
+        //
         info!("Allowing NEW peers to catch up");
         // We are essentially "isolating" these two to make it easier.
-        for _ in 1..4 {
-            let messages = scenario.peers.get_mut(&1).unwrap().read_messages();
-            scenario.dispatch(messages)?;
-            let messages = scenario.peers.get_mut(&4).unwrap().read_messages();
-            scenario.dispatch(messages)?;
-        }
+        scenario.read_and_dispatch_messages_from(&[1, 4, 1, 4, 1, 4]);
         
         info!("Advancing NEW configuration, now in joint");
         scenario.expect_and_apply_transition_entry(&[4], ConfChangeType::BeginSetNodes);
@@ -235,28 +202,14 @@ mod three_peer_cluster_adds_voter {
         // By now all followers should be able to commit the Finalize.
         // Check in with the OLD configuration and get any responses they have.
         info!("Finishing up peer communications.");
-        for _ in 1..=2 {
-            let messages = scenario.peers.get_mut(&4).unwrap().read_messages();
-            scenario.dispatch(messages)?;
-            let messages = scenario.peers.get_mut(&1).unwrap().read_messages();
-            scenario.dispatch(messages)?;
-        }
-        let messages = scenario.peers.get_mut(&3).unwrap().read_messages();
-        scenario.dispatch(messages)?;
-        let messages = scenario.peers.get_mut(&2).unwrap().read_messages();
-        scenario.dispatch(messages)?;
-        // Leader informs OLD of commit. NEW still catching up.
-        let messages = scenario.peers.get_mut(&1).unwrap().read_messages();
-        scenario.dispatch(messages)?;
+        scenario.read_and_dispatch_messages_from(&[4, 1, 4, 1, 3, 2, 1]);
         // NEW catches up.
         
         info!("Advancing all nodes, now leaving the joint");
         scenario.expect_and_apply_transition_entry(&[1, 2, 3, 4], ConfChangeType::CommitSetNodes);
 
         info!("Verifying existing peers are not transitioning.");
-        for peer in 1..=4 {
-            assert!(!scenario.peers[&peer].prs().is_in_transition(), "Peer {} is in transition. Should not be.", peer);
-        }
+        scenario.assert_not_in_transition(&[1,2,3,4]);
 
         Ok(())
     }
@@ -292,21 +245,68 @@ impl Scenario {
                 ..Default::default()
             }, MemStorage::new()).unwrap().into())
         ).collect();
-        Ok(Scenario {
+        let mut scenario = Scenario {
             leader,
             old_configuration,
             new_configuration,
             network: Network::new(starting_peers),
-        })
-
+        };
+        // Elect the leader.
+        let message = new_message(1, 1, MessageType::MsgHup, 0);
+        scenario.send(vec![message]);
+        Ok(scenario)
     }
+
+    fn spawn_new_peers(&mut self) -> Result<()> {
+        let storage = MemStorage::new();
+        let new_peers = self.new_peers();
+        for id in new_peers.voters {
+            let raft = Raft::new(&Config {
+                id,
+                peers: vec![self.leader, id],
+                learners: vec![],
+                ..Default::default()
+            }, storage.clone())?;
+            self.peers.insert(id, raft.into());
+        }
+        for id in new_peers.learners {
+            let raft = Raft::new(&Config {
+                id,
+                peers: vec![self.leader],
+                learners: vec![id],
+                ..Default::default()
+            }, storage.clone())?;
+            self.peers.insert(id, raft.into());
+        }
+        Ok(())
+    }
+
+    fn new_peers(&self) -> Configuration {
+        let all_old = self.old_configuration.voters.iter().chain(self.old_configuration.learners.iter()).cloned().collect::<FxHashSet<_>>();
+        let all_new = self.new_configuration.voters.iter().chain(self.new_configuration.learners.iter()).cloned().collect::<FxHashSet<_>>();
+        Configuration::new(
+            self.new_configuration.voters.difference(&all_old).cloned(),
+            self.new_configuration.learners.difference(&all_old).cloned(),
+        )
+    }
+
+    fn propose_change_message(&mut self) -> Result<()> {
+        let message = propose_change_message(
+            self.leader,
+            &self.new_configuration.voters,
+            &self.new_configuration.learners,
+            self.peers[&1].raft_log.last_index() + 1
+        );
+        self.dispatch(vec![message])
+    }
+
     fn assert_not_in_transition<'a>(&self, peers: impl IntoIterator<Item= &'a u64>) {
-        for peer in peers.into_iter().map(|id| self.network.peers.get(id).unwrap()) {
+        for peer in peers.into_iter().map(|id| self.peers.get(id).unwrap()) {
             assert!(!peer.is_in_transition(), "Peer {} should not have been in transition.");
         }
     }
     fn assert_in_transition<'a>(&self, peers: impl IntoIterator<Item= &'a u64>) {
-        for peer in peers.into_iter().map(|id| self.network.peers.get(id).unwrap()) {
+        for peer in peers.into_iter().map(|id| self.peers.get(id).unwrap()) {
             assert!(peer.is_in_transition(), "Peer {} should have been in transition.");
         }
     }
@@ -340,6 +340,15 @@ impl Scenario {
                 assert!(found, "{:?} message not found for peer {}. Got: {:?}", entry_type, peer.id, entries);
                 found = false;
             } else { panic!("Didn't have any entries {}", peer.id); }
+        }
+        Ok(())
+    }
+
+    fn read_and_dispatch_messages_from<'a>(&mut self, peers: impl IntoIterator<Item= &'a u64>) -> Result<()> {
+        let peers = peers.into_iter().cloned();
+        for peer in peers {
+            let messages = self.peers.get_mut(&peer).unwrap().read_messages();
+            self.dispatch(messages)?;
         }
         Ok(())
     }
