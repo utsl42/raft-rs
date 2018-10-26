@@ -604,7 +604,6 @@ impl<T: Storage> Raft<T> {
                 self.began_set_nodes_at = None;
                 if self.state == StateRole::Leader {
                     // We must replicate the commit entry.
-                    self.mut_prs().commit_config_transition().expect("Appending the FinalizeSetNodes command should never fail. This is a bug, please report this.");
                     self.append_commit_set_nodes();
                 }
             }

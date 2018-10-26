@@ -77,6 +77,12 @@ pub struct Interface {
     pub raft: Option<Raft<MemStorage>>,
 }
 
+impl From<Raft<MemStorage>> for Interface {
+    fn from(value: Raft<MemStorage>) -> Self {
+        Interface::new(value)
+    }
+}
+
 impl Interface {
     pub fn new(r: Raft<MemStorage>) -> Interface {
         Interface { raft: Some(r) }

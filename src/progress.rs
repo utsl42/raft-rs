@@ -75,6 +75,16 @@ impl Configuration {
     }
 }
 
+impl<'a, I> From<(I, I)> for Configuration 
+where I: IntoIterator<Item = &'a u64> {
+    fn from((voters, learners): (I, I)) -> Self {
+        Self {
+            voters: voters.into_iter().cloned().collect(),
+            learners: learners.into_iter().cloned().collect(),
+        }
+    }
+}
+
 impl<'a> From<&'a ConfState> for Configuration {
     fn from(conf_state: &'a ConfState) -> Self {
         Self {
