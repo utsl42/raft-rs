@@ -336,14 +336,6 @@ impl Network {
         Ok(())
     }
 
-    /// Get pending messages from all nodes.
-    pub fn read_messages(&mut self) -> Vec<Message> {
-        self.peers
-            .iter_mut()
-            .flat_map(|(_, p)| p.read_messages())
-            .collect()
-    }
-
     pub fn drop(&mut self, from: u64, to: u64, perc: f64) {
         self.dropm.insert(Connem { from, to }, perc);
     }

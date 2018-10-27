@@ -1109,7 +1109,7 @@ impl<T: Storage> Raft<T> {
     /// This `ConfChange` must be of variant `BeginSetNodes` and contain a `configuration` value.
     // TODO: Make this return a result.
     #[inline(always)]
-    pub fn begin_membership_change(&mut self, mut entry: &Entry) -> Result<()> {
+    pub fn begin_membership_change(&mut self, entry: &Entry) -> Result<()> {
         trace!(
             "{} enter begin_membership_change(entry: {:?})",
             self.id,
@@ -1150,7 +1150,7 @@ impl<T: Storage> Raft<T> {
     /// This `ConfChange` must be of variant `CommitSetNodes` and contain no `configuration` value.
     // TODO: Make this return a result.
     #[inline(always)]
-    pub fn finalize_membership_change(&mut self, mut entry: &Entry) -> Result<()> {
+    pub fn finalize_membership_change(&mut self, entry: &Entry) -> Result<()> {
         trace!(
             "{} enter finalize_membership_change(entry: {:?})",
             self.id,
@@ -1297,9 +1297,9 @@ impl<T: Storage> Raft<T> {
             if pr.state == ProgressState::Replicate && pr.ins.full() {
                 pr.ins.free_first_one();
             }
-            // if pr.matched < self.raft_log.last_index() {
-            *send_append = true;
-            // }
+            if pr.matched < self.raft_log.last_index() {
+                *send_append = true;
+            }
 
             if self.read_only.option != ReadOnlyOption::Safe || m.get_context().is_empty() {
                 debug!("Early exit due to read_only being not Safe (is {:?}), or no context. (is {:?})", self.read_only.option, m.get_context());
@@ -1613,7 +1613,7 @@ impl<T: Storage> Raft<T> {
 
     // step_candidate is shared by state Candidate and PreCandidate; the difference is
     // whether they respond to MsgRequestVote or MsgRequestPreVote.
-    fn step_candidate(&mut self, mut m: Message) -> Result<()> {
+    fn step_candidate(&mut self, m: Message) -> Result<()> {
         match m.get_msg_type() {
             MessageType::MsgPropose => {
                 info!(

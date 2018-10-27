@@ -260,7 +260,8 @@ impl<T: Storage> RaftLog<T> {
     /// # Panics
     ///
     /// Panics if the value passed in is not new or known.
-    #[deprecated = "Call raft::commit_apply instead. Joint Consensus requires an on-apply hook to finalize a configuration change."]
+    #[deprecated = "Call raft::commit_apply(idx) instead. Joint Consensus requires an on-apply hook to
+    finalize a configuration change. This will become internal API in future versions."]
     pub fn applied_to(&mut self, idx: u64) {
         if idx == 0 {
             return;
@@ -669,6 +670,7 @@ mod test {
             "maybe_commit return false"
         );
         let committed = raft_log.committed;
+        #[allow(deprecated)]
         raft_log.applied_to(committed);
         let offset = 500u64;
         raft_log.store.wl().compact(offset).expect("compact failed");
@@ -918,6 +920,7 @@ mod test {
             let mut raft_log = new_raft_log(store);
             raft_log.append(&ents);
             raft_log.maybe_commit(5, 1);
+            #[allow(deprecated)]
             raft_log.applied_to(applied);
 
             let next_entries = raft_log.next_entries();
@@ -942,6 +945,7 @@ mod test {
             let mut raft_log = new_raft_log(store);
             raft_log.append(&ents);
             raft_log.maybe_commit(5, 1);
+            #[allow(deprecated)]
             raft_log.applied_to(applied);
 
             let actual_has_next = raft_log.has_next_entries();
@@ -1320,6 +1324,7 @@ mod test {
             let mut raft_log = new_raft_log(store);
             raft_log.maybe_commit(last_index, 0);
             let committed = raft_log.committed;
+            #[allow(deprecated)]
             raft_log.applied_to(committed);
 
             for (j, idx) in compact.into_iter().enumerate() {

@@ -94,7 +94,7 @@ fn next_ents(r: &mut Raft<MemStorage>, s: &MemStorage) -> Vec<Entry> {
     r.raft_log.stable_to(last_idx, last_term);
     let ents = r.raft_log.next_entries();
     let committed = r.raft_log.committed;
-    r.raft_log.applied_to(committed);
+    r.commit_apply(committed);
     ents.unwrap_or_else(Vec::new)
 }
 
@@ -1141,7 +1141,7 @@ fn test_commit() {
         let mut sm = new_test_raft(1, vec![1], 5, 1, store);
         for (j, &v) in matches.iter().enumerate() {
             let id = j as u64 + 1;
-            if !sm.prs().get(id).is_some() {
+            if sm.prs().get(id).is_none() {
                 sm.set_progress(id, v, v + 1, false);
             }
         }
@@ -3718,7 +3718,7 @@ fn test_learner_receive_snapshot() {
 
     n1.restore(s);
     let committed = n1.raft_log.committed;
-    n1.raft_log.applied_to(committed);
+    n1.commit_apply(committed);
 
     let mut network = Network::new(vec![Some(n1), Some(n2)]);
 

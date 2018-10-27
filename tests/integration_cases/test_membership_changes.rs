@@ -17,10 +17,10 @@ use protobuf::{self, RepeatedField};
 use raft::{
     eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, Message, MessageType},
     storage::MemStorage,
-    Config, Configuration, ProgressSet, Raft, Result, StateRole, NO_LIMIT,
+    Config, Configuration, Raft, Result, NO_LIMIT,
 };
 use std::ops::{Deref, DerefMut};
-use test_util::{new_message, setup_for_test, Interface, Network};
+use test_util::{new_message, setup_for_test, Network};
 
 // Test that the API itself works.
 //
@@ -193,7 +193,7 @@ impl Scenario {
                 Some(
                     Raft::new(
                         &Config {
-                            id: id,
+                            id,
                             peers: old_configuration.voters.iter().cloned().collect(),
                             learners: old_configuration.learners.iter().cloned().collect(),
                             ..Default::default()
@@ -279,18 +279,20 @@ impl Scenario {
     }
 
     fn assert_not_in_transition<'a>(&self, peers: impl IntoIterator<Item = &'a u64>) {
-        for peer in peers.into_iter().map(|id| self.peers.get(id).unwrap()) {
+        for peer in peers.into_iter().map(|id| &self.peers[id]) {
             assert!(
                 !peer.is_in_transition(),
-                "Peer {} should not have been in transition."
+                "Peer {} should not have been in transition.",
+                peer.id
             );
         }
     }
     fn assert_in_transition<'a>(&self, peers: impl IntoIterator<Item = &'a u64>) {
-        for peer in peers.into_iter().map(|id| self.peers.get(id).unwrap()) {
+        for peer in peers.into_iter().map(|id| &self.peers[id]) {
             assert!(
                 peer.is_in_transition(),
-                "Peer {} should have been in transition."
+                "Peer {} should have been in transition.",
+                peer.id
             );
         }
     }
@@ -300,7 +302,7 @@ impl Scenario {
         peers: impl IntoIterator<Item = &'a u64>,
         entry_type: ConfChangeType,
     ) -> Result<()> {
-        for peer in peers.into_iter() {
+        for peer in peers {
             debug!(
                 "Advancing peer {}, expecting a {:?} entry.",
                 peer, entry_type
