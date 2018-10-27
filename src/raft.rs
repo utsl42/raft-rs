@@ -588,7 +588,7 @@ impl<T: Storage> Raft<T> {
     }
 
     /// Commit that the Raft peer has applied up to the given index.
-    /// 
+    ///
     /// Registers the new applied index to the Raft log, then checks to see if it's time to finalize a Joint Consensus state.
     pub fn commit_apply(&mut self, applied: u64) {
         trace!("{:?}, Enter commit_apply(applied: {:?})", self.id, applied);
@@ -1161,7 +1161,10 @@ impl<T: Storage> Raft<T> {
 
         assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-        assert_eq!(conf_change.get_change_type(), ConfChangeType::CommitSetNodes);
+        assert_eq!(
+            conf_change.get_change_type(),
+            ConfChangeType::CommitSetNodes
+        );
         self.mut_prs().commit_config_transition()?;
         trace!(
             "{} exit finalize_membership_change(entry: {:?})",
@@ -1233,7 +1236,7 @@ impl<T: Storage> Raft<T> {
                 if pr.state == ProgressState::Replicate {
                     pr.become_probe();
                 }
-               *send_append = true;
+                *send_append = true;
             }
             return;
         }
@@ -1295,7 +1298,7 @@ impl<T: Storage> Raft<T> {
                 pr.ins.free_first_one();
             }
             // if pr.matched < self.raft_log.last_index() {
-                *send_append = true;
+            *send_append = true;
             // }
 
             if self.read_only.option != ReadOnlyOption::Safe || m.get_context().is_empty() {
@@ -1949,8 +1952,7 @@ impl<T: Storage> Raft<T> {
     /// This method can be false positive.
     #[inline]
     pub fn has_pending_conf(&self) -> bool {
-        self.pending_conf_index > self.raft_log.applied ||
-            self.began_set_nodes_at.is_some()
+        self.pending_conf_index > self.raft_log.applied || self.began_set_nodes_at.is_some()
     }
 
     /// Specifies if the commit should be broadcast.
