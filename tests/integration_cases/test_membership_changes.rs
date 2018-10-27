@@ -107,8 +107,8 @@ mod api {
     }
 }
 
-// Test that a single peer is able to progress into a cluster.
-mod three_peer_cluster_adds_voter {
+// Test that small cluster is able to progress through adding a voter.
+mod three_peers_add_voter {
     use super::*;
 
     /// In a steady state transition should proceed without issue.
@@ -151,6 +151,212 @@ mod three_peer_cluster_adds_voter {
         scenario.expect_apply_transition_entry(&[1, 2, 3, 4], ConfChangeType::CommitSetNodes)?;
         scenario.assert_transition_entry_at(&[1, 2, 3, 4], 3, ConfChangeType::CommitSetNodes);
         scenario.assert_not_in_transition(&[1, 2, 3, 4]);
+
+        Ok(())
+    }
+}
+
+// Test that small cluster is able to progress through adding a learner.
+mod three_peers_add_learner {
+    use super::*;
+
+    /// In a steady state transition should proceed without issue.
+    #[test]
+    fn stable() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 3], [4]);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2, 3], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 3], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 3]);
+
+        info!("Allowing new peers to catch up.");
+        scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
+        scenario.expect_apply_transition_entry(&[4], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[4], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 3, 4]);
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[3, 2, 1])?;
+        scenario.expect_apply_transition_entry(&[1, 2, 3, 4], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 3, 4], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2, 3, 4]);
+
+        Ok(())
+    }
+}
+
+// Test that small cluster is able to progress through adding a learner.
+mod three_peers_replace_voter {
+    use super::*;
+
+    /// In a steady state transition should proceed without issue.
+    #[test]
+    fn stable() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 4], []);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        scenario.isolate(3); // Take 3 down.
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2]);
+
+        info!("Allowing new peers to catch up.");
+        scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
+        scenario.expect_apply_transition_entry(&[4], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[4], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 4]);
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[2, 1, 4])?;
+        scenario.expect_apply_transition_entry(&[1, 2, 4], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 4], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2, 4]);
+
+        Ok(())
+    }
+}
+
+// Test that small cluster is able to progress through adding a learner.
+mod three_peers_to_five_with_learner {
+    use super::*;
+
+    /// In a steady state transition should proceed without issue.
+    #[test]
+    fn stable() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 3, 4, 5], [6]);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2, 3], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 3], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 3]);
+
+        info!("Allowing new peers to catch up.");
+        scenario.expect_read_and_dispatch_messages_from(&[4, 5, 6, 1, 4, 5, 6])?;
+        scenario.expect_apply_transition_entry(&[4, 5, 6], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[4, 5, 6], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 3, 4, 5, 6]);
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[3, 2, 1])?;
+        scenario.expect_apply_transition_entry(&[1, 2, 3, 4, 5, 6], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 3, 4, 5, 6], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2, 3, 4, 5, 6]);
+
+        Ok(())
+    }
+
+    /// In a steady state transition should proceed without issue.
+    #[test]
+    fn minority_old_followers_halt_at_start() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 3, 4, 5], [6]);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.isolate(3);
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2]);
+        scenario.assert_not_in_transition(&[3]);
+
+        info!("Allowing new peers to catch up.");
+        scenario.expect_read_and_dispatch_messages_from(&[4, 5, 6, 1])?;
+        scenario.expect_apply_transition_entry(&[4, 5, 6], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[4, 5, 6], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 4, 5, 6]);
+        scenario.assert_not_in_transition(&[3]);
+
+        scenario.expect_read_and_dispatch_messages_from(&[4, 5, 6])?;
+
+        info!("Cluster leaving the joint.");
+        {
+            let mut leader = scenario.peers.get_mut(&1).unwrap();
+            let ticks = leader.get_heartbeat_timeout();
+            for _ in 0..=ticks {
+                leader.tick();
+            }
+        }
+        scenario.expect_read_and_dispatch_messages_from(&[2, 1, 4, 5, 6, 1, 4, 5, 6, 1])?;
+        scenario.expect_apply_transition_entry(&[1, 2, 4, 5], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 4, 5], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2, 4, 5]);
+        scenario.assert_not_in_transition(&[3]);
 
         Ok(())
     }
@@ -251,8 +457,7 @@ impl Scenario {
         let all_old = self
             .old_configuration
             .voters
-            .iter()
-            .chain(self.old_configuration.learners.iter())
+            .union(&self.old_configuration.learners)
             .cloned()
             .collect::<FxHashSet<_>>();
         Configuration::new(
@@ -366,6 +571,7 @@ impl Scenario {
                 peer, step
             );
             let messages = self.peers.get_mut(&peer).unwrap().read_messages();
+            trace!("{} sends messages: {:?}", peer, messages);
             assert!(
                 !messages.is_empty(),
                 "Expected peer {} to have messages at step {}.",

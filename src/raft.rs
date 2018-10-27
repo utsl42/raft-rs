@@ -583,7 +583,7 @@ impl<T: Storage> Raft<T> {
         trace!("{} Enter maybe_commit()", self.id);
         let mci = self.prs().minimum_committed_index();
         let result = self.raft_log.maybe_commit(mci, self.term);
-        trace!("Exit maybe_commit()");
+        trace!("{} Exit maybe_commit() -> {}", self.id, result);
         result
     }
 

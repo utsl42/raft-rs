@@ -28,6 +28,7 @@
 use eraftpb::ConfState;
 use errors::Error;
 use fxhash::{FxBuildHasher, FxHashMap, FxHashSet};
+use std::collections::hash_set::Union;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 
@@ -395,13 +396,29 @@ impl ProgressSet {
     /// Eg. If the matched indexes are [2,2,2,4,5], it will return 2.
     pub fn minimum_committed_index(&self) -> u64 {
         let mut matched = self
-            .voters()
-            .map(|(_id, peer)| peer.matched)
+            .configuration.voters.iter()
+            .map(|id| {
+                let peer = &self.progress[id];
+                peer.matched })
             .collect::<Vec<_>>();
         // Reverse sort.
         matched.sort_by(|a, b| b.cmp(a));
-        // Smallest that the majority has commited.
-        matched[matched.len() / 2]
+        let mut mci = matched[matched.len() / 2];
+
+        if let Some(next) = &self.next_configuration {
+            let mut matched = next.voters.iter()
+            .map(|id| {
+                let peer = &self.progress[id];
+                peer.matched })
+            .collect::<Vec<_>>();
+            matched.sort_by(|a, b| b.cmp(a));
+            // Smallest that the majority has commited.
+            let next_mci = matched[matched.len() / 2];
+            if next_mci < mci {
+                mci = next_mci;
+            }
+        }
+        mci
     }
 
     /// Returns the Candidate's eligibility in the current election.
