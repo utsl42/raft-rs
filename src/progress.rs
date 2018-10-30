@@ -506,7 +506,7 @@ impl ProgressSet {
     ///
     /// Once this state is entered the leader should replicate the `ConfChange` message. After the
     /// majority of nodes, in both the current and the `next`, have committed the union state. At
-    /// this point the leader can call `commit_config_transition` and replicate a message
+    /// this point the leader can call `finalize_config_transition` and replicate a message
     /// commiting the change.
     ///
     /// Valid transitions:
@@ -558,7 +558,7 @@ impl ProgressSet {
     ///
     /// This should be called only after calling `begin_config_transition` and the the majority
     /// of nodes in both the `current` and the `next` state have commited the changes.
-    pub fn commit_config_transition(&mut self) -> Result<(), Error> {
+    pub fn finalize_config_transition(&mut self) -> Result<(), Error> {
         let next = self.next_configuration.take();
         match next {
             None => Err(Error::NoPendingTransition)?,
@@ -1167,7 +1167,7 @@ mod test_progress_set {
             "Transition state learners inaccurate."
         );
 
-        set.commit_config_transition()?;
+        set.finalize_config_transition()?;
         assert!(!set.is_in_transition());
         assert_eq!(set.voter_ids(), end_voters, "End state voters inaccurate");
         assert_eq!(

@@ -146,7 +146,7 @@ pub struct Raft<T: Storage> {
     /// value.
     pub pending_conf_index: u64,
 
-    /// The last BeginSetNodes entry. Once we commit this entry we can exit the joint state.
+    /// The last BeginConfChange entry. Once we commit this entry we can exit the joint state.
     //TODO: Ensure this is initialized like `pending_conf_index`, also attempt to merge them.
     began_set_nodes_at: Option<u64>,
 
@@ -604,16 +604,16 @@ impl<T: Storage> Raft<T> {
                 self.began_set_nodes_at = None;
                 if self.state == StateRole::Leader {
                     // We must replicate the commit entry.
-                    self.append_commit_set_nodes();
+                    self.append_finalize_conf_change_entry();
                 }
             }
         }
         trace!("Exit commit_apply(applied: {:?})", applied);
     }
 
-    fn append_commit_set_nodes(&mut self) {
+    fn append_finalize_conf_change_entry(&mut self) {
         let mut conf_change = ConfChange::new();
-        conf_change.set_change_type(ConfChangeType::CommitSetNodes);
+        conf_change.set_change_type(ConfChangeType::FinalizeConfChange);
         let data = protobuf::Message::write_to_bytes(&conf_change).unwrap();
         let mut entry = Entry::new();
         entry.set_entry_type(EntryType::EntryConfChange);
@@ -1089,7 +1089,7 @@ impl<T: Storage> Raft<T> {
         Ok(())
     }
 
-    /// Called to apply a `BeginSetNodes` entry.
+    /// Called to apply a `BeginConfChange` entry.
     ///
     ///
     /// When a Raft node applies this variant of a configuration change it will adopt a joint configuration state until the membership change is finalized.
@@ -1106,7 +1106,7 @@ impl<T: Storage> Raft<T> {
     ///
     /// This **must** only be called on `Entry` which holds an `Entry` of with `EntryType::ConfChange` and the `data` field being a serialized `ConfChange`.
     ///
-    /// This `ConfChange` must be of variant `BeginSetNodes` and contain a `configuration` value.
+    /// This `ConfChange` must be of variant `BeginConfChange` and contain a `configuration` value.
     // TODO: Make this return a result.
     #[inline(always)]
     pub fn begin_membership_change(&mut self, entry: &Entry) -> Result<()> {
@@ -1119,7 +1119,7 @@ impl<T: Storage> Raft<T> {
         // Notably, if another is happening now.
         assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-        assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginSetNodes);
+        assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginConfChange);
         let configuration = conf_change.get_configuration();
         self.began_set_nodes_at = Some(entry.get_index());
         self.mut_prs().begin_config_transition(configuration)?;
@@ -1131,7 +1131,7 @@ impl<T: Storage> Raft<T> {
         Ok(())
     }
 
-    /// Called to apply a `CommitSetNodes` entry.
+    /// Called to apply a `FinalizeConfChange` entry.
     ///
     /// When a Raft node applies this variant of a configuration change it will finalize the transition begun by [`begin_membership_change`]
     ///
@@ -1147,7 +1147,7 @@ impl<T: Storage> Raft<T> {
     ///
     /// This **must** only be called on `Entry` which holds an `Entry` of with `EntryType::ConfChange` and the `data` field being a serialized `ConfChange`.
     ///
-    /// This `ConfChange` must be of variant `CommitSetNodes` and contain no `configuration` value.
+    /// This `ConfChange` must be of variant `FinalizeConfChange` and contain no `configuration` value.
     // TODO: Make this return a result.
     #[inline(always)]
     pub fn finalize_membership_change(&mut self, entry: &Entry) -> Result<()> {
@@ -1163,9 +1163,9 @@ impl<T: Storage> Raft<T> {
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
         assert_eq!(
             conf_change.get_change_type(),
-            ConfChangeType::CommitSetNodes
+            ConfChangeType::FinalizeConfChange
         );
-        self.mut_prs().commit_config_transition()?;
+        self.mut_prs().finalize_config_transition()?;
         trace!(
             "{} exit finalize_membership_change(entry: {:?})",
             self.id,
@@ -1993,7 +1993,7 @@ impl<T: Storage> Raft<T> {
     ///
     /// * `voters` and `learners` are not mutually exclusive.
     /// * `voters` is empty.
-    pub fn set_nodes(&mut self, conf_state: &ConfState) -> Result<()> {
+    pub fn begin_config_transition(&mut self, conf_state: &ConfState) -> Result<()> {
         if self.state != StateRole::Leader {
             Err(Error::InvalidState(self.state))?;
         }
@@ -2005,7 +2005,7 @@ impl<T: Storage> Raft<T> {
         );
         // Prep a configuration change to append.
         let mut conf_change = ConfChange::new();
-        conf_change.set_change_type(ConfChangeType::BeginSetNodes);
+        conf_change.set_change_type(ConfChangeType::BeginConfChange);
         conf_change.set_configuration((*conf_state).clone());
         let data = protobuf::Message::write_to_bytes(&conf_change)?;
         let mut entry = Entry::new();

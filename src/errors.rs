@@ -70,7 +70,7 @@ quick_error! {
         }
         /// The node attempted to transition to a new membership configuration while there was none pending.
         NoPendingTransition {
-            display("No pending membership transition. Create a pending transition with `Raft.set_nodes`")
+            display("No pending membership transition. Create a pending transition with `Raft.begin_config_transition`")
         }
     }
 }

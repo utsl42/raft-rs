@@ -59,7 +59,6 @@ enum MessageType {
     MsgReadIndexResp = 16;
     MsgRequestPreVote = 17;
     MsgRequestPreVoteResponse = 18;
-    MsgSetNodes = 19;
 }
 
 message Message {
@@ -92,8 +91,8 @@ enum ConfChangeType {
     AddNode    = 0;
     RemoveNode = 1;
     AddLearnerNode = 2;
-    BeginSetNodes = 3;
-    CommitSetNodes = 4;
+    BeginConfChange = 3;
+    FinalizeConfChange = 4;
 }
 
 message ConfChange {
@@ -102,6 +101,6 @@ message ConfChange {
     // Used in `AddNode`, `RemoveNode`, and `AddLearnerNode`.
     uint64 node_id = 3;
     bytes context = 4;
-    // Used in `SetNodes`.
+    // Used in `BeginConfChange` and `FinalizeConfChange`.
     ConfState configuration = 5;
 }
