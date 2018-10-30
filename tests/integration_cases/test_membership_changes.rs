@@ -205,13 +205,57 @@ mod three_peers_add_learner {
     }
 }
 
-// Test that small cluster is able to progress through adding a learner.
+// Test that small cluster is able to progress through replacing a voter.
 mod three_peers_replace_voter {
     use super::*;
 
     /// In a steady state transition should proceed without issue.
     #[test]
     fn stable() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 4], []);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2]);
+
+        info!("Allowing new peers to catch up.");
+        scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
+        scenario.expect_apply_transition_entry(&[4], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[4], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 4]);
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[2, 1, 4])?;
+        scenario.expect_apply_transition_entry(&[1, 2, 4], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 4], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2, 4]);
+
+        Ok(())
+    }
+
+    // Ensure if a peer in the old quorum fails, but the quorum is still big enough, it's ok.
+    #[test]
+    fn pending_delete_fails_after_begin() -> Result<()> {
         setup_for_test();
         let leader = 1;
         let old_configuration = ([1, 2, 3], []);
@@ -251,6 +295,87 @@ mod three_peers_replace_voter {
         scenario.expect_apply_transition_entry(&[1, 2, 4], ConfChangeType::CommitSetNodes)?;
         scenario.assert_transition_entry_at(&[1, 2, 4], 3, ConfChangeType::CommitSetNodes);
         scenario.assert_not_in_transition(&[1, 2, 4]);
+
+        Ok(())
+    }
+
+    // Ensure if a peer in the new quorum fails, but the quorum is still big enough, it's ok.
+    #[test]
+    fn pending_create_with_quorum_fails_after_begin() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 4], []);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        scenario.isolate(4); // Take 4 down.
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2, 3], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 3], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2, 3]);
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[2, 1])?;
+        scenario.expect_apply_transition_entry(&[1, 2, 3], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2, 3], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2, 3]);
+
+        Ok(())
+    }
+
+    // Ensure if the peer pending a deletion and the peer pending a creation both fail it's still ok (so long as both quorums hold).
+    #[test]
+    fn pending_create_and_destroy_both_fail() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 4], []);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.expect_apply_transition_entry(&[1], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1]);
+
+        scenario.isolate(3); // Take 3 down.
+        scenario.isolate(4); // Take 4 down.
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.expect_apply_transition_entry(&[2], ConfChangeType::BeginSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2], 2, ConfChangeType::BeginSetNodes);
+        scenario.assert_in_transition(&[1, 2]);
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[2, 1])?;
+        scenario.expect_apply_transition_entry(&[1, 2], ConfChangeType::CommitSetNodes)?;
+        scenario.assert_transition_entry_at(&[1, 2], 3, ConfChangeType::CommitSetNodes);
+        scenario.assert_not_in_transition(&[1, 2]);
 
         Ok(())
     }
@@ -304,7 +429,7 @@ mod three_peers_to_five_with_learner {
         Ok(())
     }
 
-    /// In a steady state transition should proceed without issue.
+    /// In this, a single node (of 3) halts during the transition.
     #[test]
     fn minority_old_followers_halt_at_start() -> Result<()> {
         setup_for_test();
@@ -362,11 +487,15 @@ mod three_peers_to_five_with_learner {
     }
 }
 
+/// A test harness providing some useful utility and shorthand functions appropriate for this test suite.
+/// 
+/// Since it derefs into `Network` it can be used the same way.
 struct Scenario {
     leader: u64,
     old_configuration: Configuration,
     new_configuration: Configuration,
     network: Network,
+
 }
 impl Deref for Scenario {
     type Target = Network;
@@ -381,6 +510,7 @@ impl DerefMut for Scenario {
 }
 
 impl Scenario {
+    /// Create a new scenario with the given state.
     fn new(
         leader: u64,
         old_configuration: impl Into<Configuration>,
@@ -422,6 +552,9 @@ impl Scenario {
         Ok(scenario)
     }
 
+    /// Creates any peers which are pending creation.
+    /// 
+    /// This *only* creates the peers and adds them to the `Network`. It does not take other action. Newly created peers are only aware of the leader and themself.
     fn spawn_new_peers(&mut self) -> Result<()> {
         let storage = MemStorage::new();
         let new_peers = self.new_peers();
@@ -453,6 +586,7 @@ impl Scenario {
         Ok(())
     }
 
+    /// Return a configuration containing only the peers pending creation.
     fn new_peers(&self) -> Configuration {
         let all_old = self
             .old_configuration
@@ -469,6 +603,7 @@ impl Scenario {
         )
     }
 
+    /// Send the message which proposes the configuration change.
     fn propose_change_message(&mut self) -> Result<()> {
         info!(
             "Proposing change message. Target: {:?}",
@@ -483,6 +618,7 @@ impl Scenario {
         self.dispatch(vec![message])
     }
 
+    /// Checks that the given peers are not in a transition state.
     fn assert_not_in_transition<'a>(&self, peers: impl IntoIterator<Item = &'a u64>) {
         for peer in peers.into_iter().map(|id| &self.peers[id]) {
             assert!(
@@ -492,6 +628,8 @@ impl Scenario {
             );
         }
     }
+
+    // Checks that the given peers are in a transition state.
     fn assert_in_transition<'a>(&self, peers: impl IntoIterator<Item = &'a u64>) {
         for peer in peers.into_iter().map(|id| &self.peers[id]) {
             assert!(
@@ -502,6 +640,7 @@ impl Scenario {
         }
     }
 
+    /// Reads the pending entries to be applied to a raft peer, checks one is of the expected variant, and applies it. Then, it advances the node to that point in the configuration change.
     fn expect_apply_transition_entry<'a>(
         &mut self,
         peers: impl IntoIterator<Item = &'a u64>,
@@ -534,6 +673,7 @@ impl Scenario {
                         peer.raft_log.commit_to(entry.get_index());
                         peer.commit_apply(entry.get_index());
                         peer.tick();
+                        break;
                     }
                 }
                 assert!(
@@ -560,6 +700,10 @@ impl Scenario {
         }
         Ok(())
     }
+
+    /// Reads messages from each peer in a given list, and dispatches their message before moving to the next peer.
+    /// 
+    /// Expects each peer to have a message. If the message is not defintely sent use `read_and_dispatch_messages_from`.
     fn expect_read_and_dispatch_messages_from<'a>(
         &mut self,
         peers: impl IntoIterator<Item = &'a u64>,
@@ -582,6 +726,8 @@ impl Scenario {
         }
         Ok(())
     }
+
+    // Verify there is a transition entry at the given index of the given variant.
     fn assert_transition_entry_at<'a>(
         &self,
         peers: impl IntoIterator<Item = &'a u64>,
