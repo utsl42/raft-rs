@@ -313,9 +313,9 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
-            ConfChangeType::BeginConfChange => self.raft.begin_config_transition(cc.get_configuration()).unwrap(),
+            ConfChangeType::BeginConfChange => self.raft.propose_config_transition(cc.get_configuration()).unwrap(),
             ConfChangeType::FinalizeConfChange => {
-                unreachable!("FinalizeConfChange should occur in the cluster")
+                self.raft.mut_prs().finalize_config_transition().unwrap();
             }
         }
         let mut cs = ConfState::new();

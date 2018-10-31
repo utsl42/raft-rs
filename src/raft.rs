@@ -1984,7 +1984,7 @@ impl<T: Storage> Raft<T> {
     /// let mut conf = ConfState::default();
     /// conf.set_nodes(vec![1,2,3]);
     /// conf.set_learners(vec![4]);
-    /// if let Err(e) = raft.set_nodes(&conf) {
+    /// if let Err(e) = raft.propose_config_transition(&conf) {
     ///     panic!("{}", e);
     /// }
     /// ```
@@ -1993,7 +1993,7 @@ impl<T: Storage> Raft<T> {
     ///
     /// * `voters` and `learners` are not mutually exclusive.
     /// * `voters` is empty.
-    pub fn begin_config_transition(&mut self, conf_state: &ConfState) -> Result<()> {
+    pub fn propose_config_transition(&mut self, conf_state: &ConfState) -> Result<()> {
         if self.state != StateRole::Leader {
             Err(Error::InvalidState(self.state))?;
         }
