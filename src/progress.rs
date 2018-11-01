@@ -502,7 +502,7 @@ impl ProgressSet {
 
     /// Enter a joint consensus state to transition to the specified configuration.
     ///
-    /// The `next` provided should be derived from the `ConfChange` message.
+    /// The `next` provided should be derived from the `ConfChange` message. `progress` is used as a basis for created peer `Progress` values. You are only expected to set `ins` from the `raft.max_inflights` value.
     ///
     /// Once this state is entered the leader should replicate the `ConfChange` message. After the
     /// majority of nodes, in both the current and the `next`, have committed the union state. At
@@ -520,7 +520,7 @@ impl ProgressSet {
     /// * Voter -> Learner
     /// * Member as voter and learner.
     /// * Empty voter set.
-    pub fn begin_config_transition(&mut self, next: impl Into<Configuration>) -> Result<(), Error> {
+    pub fn begin_config_transition(&mut self, next: impl Into<Configuration>, mut progress: Progress) -> Result<(), Error> {
         let next = next.into();
         next.valid()?;
         // Demotion check.
@@ -533,21 +533,14 @@ impl ProgressSet {
             Err(Error::Exists(demoted, "learners"))?;
         }
         debug!("Beginning member configuration transition. End state will be voters {:?}, Learners: {:?}", next.voters, next.learners);
-        // TODO: Fill ins_size with correct value.
-        let mut new_progress = Progress::new(1, 10);
+
         // When a node is first added/promoted, we should mark it as recently active.
         // Otherwise, check_quorum may cause us to step down if it is invoked
         // before the added node has a chance to commuicate with us.
-        new_progress.recent_active = true;
-        new_progress.paused = false;
+        progress.recent_active = true;
+        progress.paused = false;
         for id in next.voters.iter().chain(&next.learners) {
-            self.progress.entry(*id).or_insert_with(|| {
-                let mut progress = new_progress.clone();
-                // Turns out cloning doesn't copy the vector capacity.
-                // TODO: Real value.
-                progress.ins = Inflights::new(10);
-                progress
-            });
+            self.progress.entry(*id).or_insert_with(|| progress.clone());
         }
         self.next_configuration = Some(next);
         // Now we create progresses for any that do not exist.
@@ -737,7 +730,7 @@ impl Progress {
 }
 
 /// A buffer of inflight messages.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Inflights {
     // the starting index in the buffer
     start: usize,
@@ -746,6 +739,19 @@ pub struct Inflights {
 
     // ring buffer
     buffer: Vec<u64>,
+}
+
+// The `buffer` must have it's capacity set correctly on clone, normally it does not.
+impl Clone for Inflights {
+    fn clone(&self) -> Self {
+        let mut buffer = self.buffer.clone();
+        buffer.reserve(self.buffer.capacity() - self.buffer.len());
+        Inflights {
+            start: self.start,
+            count: self.count,
+            buffer: buffer,
+        }
+    }
 }
 
 impl Inflights {
@@ -1154,7 +1160,7 @@ mod test_progress_set {
         for starter in start_learners {
             set.insert_learner(starter, default_progress.clone())?;
         }
-        set.begin_config_transition(Configuration::new(end_voters.clone(), end_learners.clone()))?;
+        set.begin_config_transition(Configuration::new(end_voters.clone(), end_learners.clone()), default_progress)?;
         assert!(set.is_in_transition());
         assert_eq!(
             set.voter_ids(),

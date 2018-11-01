@@ -1127,7 +1127,8 @@ impl<T: Storage> Raft<T> {
         assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginConfChange);
         let configuration = conf_change.get_configuration();
         self.began_set_nodes_at = Some(entry.get_index());
-        self.mut_prs().begin_config_transition(configuration)?;
+        let max_inflights = self.max_inflight;
+        self.mut_prs().begin_config_transition(configuration, Progress::new(1, max_inflights))?;
         trace!(
             "{} exit begin_membership_change(entry: {:?})",
             self.id,
