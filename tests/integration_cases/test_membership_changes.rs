@@ -573,7 +573,7 @@ mod three_peers_to_five_with_learner {
 
         info!("Cluster leaving the joint.");
         {
-            let mut leader = scenario.peers.get_mut(&1).unwrap();
+            let leader = scenario.peers.get_mut(&1).unwrap();
             let ticks = leader.get_heartbeat_timeout();
             for _ in 0..=ticks {
                 leader.tick();
