@@ -370,6 +370,11 @@ impl<T: Storage> Raft<T> {
         self.heartbeat_timeout
     }
 
+    /// Fetch the number of ticks elapsed since last heartbeat.
+    pub fn get_heartbeat_elapsed(&self) -> usize {
+        self.heartbeat_elapsed
+    }
+
     /// Return the length of the current randomized election timeout.
     pub fn get_randomized_election_timeout(&self) -> usize {
         self.randomized_election_timeout

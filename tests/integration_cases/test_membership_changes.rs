@@ -357,6 +357,137 @@ mod three_peers_replace_voter {
 
         Ok(())
     }
+
+    // Ensure if the old quorum fails during the joint state progress will halt until the peer group is recovered.
+    #[test]
+    fn old_quorum_fails() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 4], []);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_in_transition(&[1]);
+
+        info!("Old quorum fails.");
+        scenario.isolate(3); // Take 3 down.
+        scenario.isolate(2); // Take 2 down.
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 4, 1])?;
+        scenario.assert_can_apply_transition_entry_at_index(&[4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_in_transition(&[1, 4]);
+        scenario.assert_not_in_transition(&[2, 3]);
+        
+        info!("Spinning for awhile to ensure nothing spectacular happens");
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
+            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+            let messages = scenario.read_messages();
+            scenario.dispatch(messages)?;
+        }
+
+        scenario.assert_in_transition(&[1, 4]);
+        scenario.assert_not_in_transition(&[2, 3]);
+
+        info!("Recovering old qourum.");
+        scenario.recover();
+
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
+            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+        }
+
+        info!("Giving the peer group time to recover.");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3, 4, 1, 2, 3, 1])?;
+        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_in_transition(&[1, 2, 3, 4]);
+
+        info!("Failed peers confirming they have commited the begin.");
+        scenario.expect_read_and_dispatch_messages_from(&[2, 3])?;
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_not_in_transition(&[1, 2, 3, 4]);
+
+        Ok(())
+    }
+
+    // Ensure if the new quorum fails during the joint state progress will halt until the peer group is recovered.
+    #[test]
+    fn new_quorum_fails() -> Result<()> {
+        setup_for_test();
+        let leader = 1;
+        let old_configuration = ([1, 2, 3], []);
+        let new_configuration = ([1, 2, 4], []);
+        let mut scenario = Scenario::new(
+            leader,
+            (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
+            (new_configuration.0.as_ref(), new_configuration.1.as_ref()),
+        )?;
+        scenario.spawn_new_peers()?;
+        scenario.propose_change_message()?;
+
+        info!("Allowing quorum to commit");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
+
+        info!("Advancing leader, now entered the joint");
+        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_in_transition(&[1]);
+
+        info!("New quorum fails.");
+        scenario.isolate(4); // Take 4 down.
+        scenario.isolate(2); // Take 2 down.
+
+        info!("Leader replicates the commit and finalize entry.");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 3])?;
+        
+        info!("Leader waits to let the new quorum apply this before progressing.");
+        scenario.assert_in_transition(&[1]);
+        scenario.assert_not_in_transition(&[2, 3, 4]);
+        
+        info!("Spinning for awhile to ensure nothing spectacular happens");
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
+            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+            let messages = scenario.read_messages();
+            scenario.dispatch(messages)?;
+        }
+
+        scenario.assert_in_transition(&[1]);
+        scenario.assert_not_in_transition(&[2, 3, 4]);
+
+        info!("Recovering new qourum.");
+        scenario.recover();
+
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
+            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+        }
+
+        info!("Giving the peer group time to recover.");
+        scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3, 4, 1, 2, 4, 1])?;
+        scenario.assert_can_apply_transition_entry_at_index(&[2, 3, 4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_in_transition(&[1, 2, 3, 4]);
+
+        info!("Failed peers confirming they have commited the begin.");
+        scenario.expect_read_and_dispatch_messages_from(&[2, 4])?;
+
+        info!("Cluster leaving the joint.");
+        scenario.expect_read_and_dispatch_messages_from(&[1])?;
+        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_not_in_transition(&[1, 2, 3, 4]);
+
+        Ok(())
+    }
 }
 
 // Test that small cluster is able to progress through adding a learner.
@@ -459,7 +590,8 @@ mod three_peers_to_five_with_learner {
 
 /// A test harness providing some useful utility and shorthand functions appropriate for this test suite.
 /// 
-/// Since it derefs into `Network` it can be used the same way.
+/// Since it derefs into `Network` it can be used the same way. So it acts as a transparent set of utilities over the standard `Network`.
+/// The goal here is to boil down the test suite for Joint Consensus into the simplest terms possible, while allowing for control.
 struct Scenario {
     leader: u64,
     old_configuration: Configuration,
@@ -479,6 +611,7 @@ impl DerefMut for Scenario {
     }
 }
 
+// TODO: Explore moving some functionality to `Network`.
 impl Scenario {
     /// Create a new scenario with the given state.
     fn new(
