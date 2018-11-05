@@ -17,7 +17,7 @@ use protobuf::{self, RepeatedField};
 use raft::{
     eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, Message, MessageType},
     storage::MemStorage,
-    Config, Configuration, Raft, Result, NO_LIMIT,
+    Config, Configuration, Raft, Result, NO_LIMIT, StateRole,
 };
 use std::ops::{Deref, DerefMut};
 use test_util::{new_message, setup_for_test, Network};
@@ -593,7 +593,6 @@ mod three_peers_to_five_with_learner {
 /// Since it derefs into `Network` it can be used the same way. So it acts as a transparent set of utilities over the standard `Network`.
 /// The goal here is to boil down the test suite for Joint Consensus into the simplest terms possible, while allowing for control.
 struct Scenario {
-    leader: u64,
     old_configuration: Configuration,
     new_configuration: Configuration,
     network: Network,
@@ -643,7 +642,6 @@ impl Scenario {
                 )
             }).collect();
         let mut scenario = Scenario {
-            leader,
             old_configuration,
             new_configuration,
             network: Network::new(starting_peers),
@@ -666,7 +664,7 @@ impl Scenario {
             let raft = Raft::new(
                 &Config {
                     id,
-                    peers: vec![self.leader, id],
+                    peers: vec![self.leader(), id],
                     learners: vec![],
                     ..Default::default()
                 },
@@ -678,7 +676,7 @@ impl Scenario {
             let raft = Raft::new(
                 &Config {
                     id,
-                    peers: vec![self.leader],
+                    peers: vec![self.leader()],
                     learners: vec![id],
                     ..Default::default()
                 },
@@ -687,6 +685,12 @@ impl Scenario {
             self.peers.insert(id, raft.into());
         }
         Ok(())
+    }
+
+    /// Return the current leader.
+    fn leader(&self) -> u64 {
+        let (id, _) = self.peers.iter().find(|(_, peer)| peer.state == StateRole::Leader).unwrap();
+        *id
     }
 
     /// Return a configuration containing only the peers pending creation.
@@ -713,7 +717,7 @@ impl Scenario {
             self.new_configuration
         );
         let message = propose_change_message(
-            self.leader,
+            self.leader(),
             &self.new_configuration.voters,
             &self.new_configuration.learners,
             self.peers[&1].raft_log.last_index() + 1,
