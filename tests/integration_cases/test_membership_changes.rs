@@ -287,7 +287,7 @@ mod remove_leader {
         setup_for_test();
         let leader = 1;
         let old_configuration = ([1, 2, 3], []);
-        let new_configuration = ([1, 2], []);
+        let new_configuration = ([2, 3], []);
         let mut scenario = Scenario::new(
             leader,
             (old_configuration.0.as_ref(), old_configuration.1.as_ref()),
@@ -309,9 +309,11 @@ mod remove_leader {
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Cluster leaving the joint.");
-        scenario.expect_read_and_dispatch_messages_from(&[2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2], 3, ConfChangeType::FinalizeConfChange);
-        scenario.assert_not_in_transition(&[1, 2]);
+        scenario.expect_read_and_dispatch_messages_from(&[2, 3, 1])?;
+        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_not_in_transition(&[1, 2, 3]);
+        scenario.peers.iter().for_each(|(id, raft)| println!("{:?}: {:?}", id, raft.state));
+        assert!(scenario.leader() != 1);
 
         Ok(())
     }
