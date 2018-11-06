@@ -28,7 +28,6 @@
 use eraftpb::ConfState;
 use errors::Error;
 use fxhash::{FxBuildHasher, FxHashMap, FxHashSet};
-use std::collections::hash_set::Union;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 
@@ -54,13 +53,15 @@ impl Default for ProgressState {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Getters)]
 /// A Raft internal representation of a Configuration. This is corallary to a ConfState, but optimized for `contains` calls.
 pub struct Configuration {
     /// The voter set.
-    pub voters: FxHashSet<u64>,
+    #[get = "pub"]
+    voters: FxHashSet<u64>,
     /// The learner set.
-    pub learners: FxHashSet<u64>,
+    #[get = "pub"]
+    learners: FxHashSet<u64>,
 }
 
 impl Configuration {
@@ -133,6 +134,11 @@ impl Configuration {
     fn has_quorum(&self, potential_quorum: &FxHashSet<u64>) -> bool {
         self.voters.intersection(potential_quorum).count() >= majority(self.voters.len())
     }
+
+    /// Returns whether or not the given `id` is a member of this configuration.
+    pub fn contains(&self, id: &u64) -> bool {
+        self.voters.contains(id) || self.learners.contains(id)
+    }
 }
 
 /// The status of an election according to a Candidate node.
@@ -150,10 +156,14 @@ pub enum CandidacyStatus {
 
 /// `ProgressSet` contains several `Progress`es,
 /// which could be `Leader`, `Follower` and `Learner`.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Getters)]
 pub struct ProgressSet {
     progress: FxHashMap<u64, Progress>,
+    /// The current configuration state of the cluster.
+    #[get = "pub"]
     configuration: Configuration,
+    /// The pending configuration, which will be adopted after the Finalize entryr are applied
+    #[get = "pub"]
     next_configuration: Option<Configuration>,
     configuration_capacity: (usize, usize),
 }
@@ -164,7 +174,7 @@ impl ProgressSet {
         Self::with_capacity(0, 0)
     }
 
-    /// Create a progress sete with the specified sizes already reserved.
+    /// Create a progress set with the specified sizes already reserved.
     pub fn with_capacity(voters: usize, learners: usize) -> Self {
         let configuration_capacity = (voters, learners);
         ProgressSet {
@@ -556,8 +566,12 @@ impl ProgressSet {
         match next {
             None => Err(Error::NoPendingTransition)?,
             Some(next) => {
-                debug!("Inserted finalize member configration transition command. State will be {:?}, Learners: {:?}", next.voters, next.learners);
+                {
+                    let pending = self.configuration.voters().difference(next.voters()).chain(self.configuration.learners().difference(next.learners())).cloned();
+                    for id in pending { self.progress.remove(&id); }
+                }
                 self.configuration = next;
+                debug!("Executed finalize member configration transition command. State is Voters: {:?}, Learners: {:?}", self.configuration.voters, self.configuration.learners);
             }
         }
         Ok(())

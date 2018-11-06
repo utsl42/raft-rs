@@ -17,7 +17,7 @@ use protobuf::{self, RepeatedField};
 use raft::{
     eraftpb::{ConfChange, ConfChangeType, ConfState, Entry, EntryType, Message, MessageType},
     storage::MemStorage,
-    Config, Configuration, Raft, Result, NO_LIMIT, StateRole,
+    Config, Configuration, Raft, Result, StateRole, INVALID_ID, NO_LIMIT,
 };
 use std::ops::{Deref, DerefMut};
 use test_util::{new_message, setup_for_test, Network};
@@ -130,22 +130,38 @@ mod three_peers_add_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Allowing new peers to catch up.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3, 4]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[3, 2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3, 4]);
 
         Ok(())
@@ -175,22 +191,38 @@ mod three_peers_add_learner {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Allowing new peers to catch up.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3, 4]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[3, 2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3, 4]);
 
         Ok(())
@@ -220,17 +252,29 @@ mod remove_learner {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3, 4])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3, 4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3, 4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 3, 2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3, 4]);
 
         Ok(())
@@ -260,17 +304,29 @@ mod remove_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2]);
 
         Ok(())
@@ -300,20 +356,51 @@ mod remove_leader {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[2, 3, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3]);
-        scenario.peers.iter().for_each(|(id, raft)| println!("{:?}: {:?}", id, raft.state));
-        assert!(scenario.leader() != 1);
+        assert!(scenario.leader() == INVALID_ID);
+
+        info!("Prompting a new election.");
+        {
+            let new_leader = scenario.peers.get_mut(&2).unwrap();
+            for _ in
+                new_leader.election_elapsed..=(new_leader.get_randomized_election_timeout() + 1)
+            {
+                new_leader.tick();
+            }
+        }
+        let messages = scenario.read_messages();
+        scenario.send(messages);
+
+        info!("Verifying that all peers have the right peer group.");
+        for (_, peer) in scenario.peers.iter() {
+            assert_eq!(
+                peer.prs().configuration(),
+                &(new_configuration.0.as_ref(), new_configuration.1.as_ref()).into()
+            );
+        }
 
         Ok(())
     }
@@ -342,22 +429,38 @@ mod three_peers_replace_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2]);
 
         info!("Allowing new peers to catch up.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 4]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[2, 1, 4])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 4]);
 
         Ok(())
@@ -382,24 +485,40 @@ mod three_peers_replace_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         scenario.isolate(3); // Take 3 down.
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2]);
 
         info!("Allowing new peers to catch up.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 1, 4])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 4]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[2, 1, 4])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 4]);
 
         Ok(())
@@ -424,19 +543,31 @@ mod three_peers_replace_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         scenario.isolate(4); // Take 4 down.
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3]);
 
         Ok(())
@@ -461,7 +592,11 @@ mod three_peers_replace_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         scenario.isolate(3); // Take 3 down.
@@ -469,12 +604,20 @@ mod three_peers_replace_voter {
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2]);
 
         Ok(())
@@ -499,7 +642,11 @@ mod three_peers_replace_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Old quorum fails.");
@@ -508,13 +655,21 @@ mod three_peers_replace_voter {
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1, 4, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 4]);
         scenario.assert_not_in_transition(&[2, 3]);
-        
+
         info!("Spinning for awhile to ensure nothing spectacular happens");
-        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
-            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()
+            ..=scenario.peers[&leader].get_heartbeat_timeout()
+        {
+            scenario.peers.iter_mut().for_each(|(_, peer)| {
+                peer.tick();
+            });
             let messages = scenario.read_messages();
             scenario.dispatch(messages)?;
         }
@@ -525,13 +680,21 @@ mod three_peers_replace_voter {
         info!("Recovering old qourum.");
         scenario.recover();
 
-        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
-            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()
+            ..=scenario.peers[&leader].get_heartbeat_timeout()
+        {
+            scenario.peers.iter_mut().for_each(|(_, peer)| {
+                peer.tick();
+            });
         }
 
         info!("Giving the peer group time to recover.");
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3, 4, 1, 2, 3, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3, 4]);
 
         info!("Failed peers confirming they have commited the begin.");
@@ -539,7 +702,11 @@ mod three_peers_replace_voter {
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3, 4]);
 
         Ok(())
@@ -564,7 +731,11 @@ mod three_peers_replace_voter {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("New quorum fails.");
@@ -573,14 +744,18 @@ mod three_peers_replace_voter {
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1, 3])?;
-        
+
         info!("Leader waits to let the new quorum apply this before progressing.");
         scenario.assert_in_transition(&[1]);
         scenario.assert_not_in_transition(&[2, 3, 4]);
-        
+
         info!("Spinning for awhile to ensure nothing spectacular happens");
-        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
-            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()
+            ..=scenario.peers[&leader].get_heartbeat_timeout()
+        {
+            scenario.peers.iter_mut().for_each(|(_, peer)| {
+                peer.tick();
+            });
             let messages = scenario.read_messages();
             scenario.dispatch(messages)?;
         }
@@ -591,13 +766,21 @@ mod three_peers_replace_voter {
         info!("Recovering new qourum.");
         scenario.recover();
 
-        for _ in scenario.peers[&leader].get_heartbeat_elapsed()..=scenario.peers[&leader].get_heartbeat_timeout() {
-            scenario.peers.iter_mut().for_each(|(_, peer)| { peer.tick(); });
+        for _ in scenario.peers[&leader].get_heartbeat_elapsed()
+            ..=scenario.peers[&leader].get_heartbeat_timeout()
+        {
+            scenario.peers.iter_mut().for_each(|(_, peer)| {
+                peer.tick();
+            });
         }
 
         info!("Giving the peer group time to recover.");
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3, 4, 1, 2, 4, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3, 4], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3, 4],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3, 4]);
 
         info!("Failed peers confirming they have commited the begin.");
@@ -605,7 +788,11 @@ mod three_peers_replace_voter {
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3, 4],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3, 4]);
 
         Ok(())
@@ -635,22 +822,38 @@ mod three_peers_to_five_with_learner {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2, 3])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2, 3], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2, 3],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3]);
 
         info!("Allowing new peers to catch up.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 5, 6, 1, 4, 5, 6])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4, 5, 6], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4, 5, 6],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 3, 4, 5, 6]);
 
         info!("Cluster leaving the joint.");
         scenario.expect_read_and_dispatch_messages_from(&[3, 2, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 3, 4, 5, 6], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 3, 4, 5, 6],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 3, 4, 5, 6]);
 
         Ok(())
@@ -676,18 +879,30 @@ mod three_peers_to_five_with_learner {
         scenario.expect_read_and_dispatch_messages_from(&[1, 2])?;
 
         info!("Advancing leader, now entered the joint");
-        scenario.assert_can_apply_transition_entry_at_index(&[1], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1]);
 
         info!("Leader replicates the commit and finalize entry.");
         scenario.expect_read_and_dispatch_messages_from(&[1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[2], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[2],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2]);
         scenario.assert_not_in_transition(&[3]);
 
         info!("Allowing new peers to catch up.");
         scenario.expect_read_and_dispatch_messages_from(&[4, 5, 6, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[4, 5, 6], 2, ConfChangeType::BeginConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[4, 5, 6],
+            2,
+            ConfChangeType::BeginConfChange,
+        );
         scenario.assert_in_transition(&[1, 2, 4, 5, 6]);
         scenario.assert_not_in_transition(&[3]);
 
@@ -702,7 +917,11 @@ mod three_peers_to_five_with_learner {
             }
         }
         scenario.expect_read_and_dispatch_messages_from(&[2, 1, 4, 5, 6, 1, 4, 5, 6, 1])?;
-        scenario.assert_can_apply_transition_entry_at_index(&[1, 2, 4, 5], 3, ConfChangeType::FinalizeConfChange);
+        scenario.assert_can_apply_transition_entry_at_index(
+            &[1, 2, 4, 5],
+            3,
+            ConfChangeType::FinalizeConfChange,
+        );
         scenario.assert_not_in_transition(&[1, 2, 4, 5]);
         scenario.assert_not_in_transition(&[3]);
 
@@ -711,14 +930,13 @@ mod three_peers_to_five_with_learner {
 }
 
 /// A test harness providing some useful utility and shorthand functions appropriate for this test suite.
-/// 
+///
 /// Since it derefs into `Network` it can be used the same way. So it acts as a transparent set of utilities over the standard `Network`.
 /// The goal here is to boil down the test suite for Joint Consensus into the simplest terms possible, while allowing for control.
 struct Scenario {
     old_configuration: Configuration,
     new_configuration: Configuration,
     network: Network,
-
 }
 impl Deref for Scenario {
     type Target = Network;
@@ -747,15 +965,16 @@ impl Scenario {
             old_configuration, new_configuration
         );
         let starting_peers = old_configuration
-            .voters
-            .iter().chain(old_configuration.learners.iter())
+            .voters()
+            .iter()
+            .chain(old_configuration.learners().iter())
             .map(|&id| {
                 Some(
                     Raft::new(
                         &Config {
                             id,
-                            peers: old_configuration.voters.iter().cloned().collect(),
-                            learners: old_configuration.learners.iter().cloned().collect(),
+                            peers: old_configuration.voters().iter().cloned().collect(),
+                            learners: old_configuration.learners().iter().cloned().collect(),
                             ..Default::default()
                         },
                         MemStorage::new(),
@@ -776,13 +995,13 @@ impl Scenario {
     }
 
     /// Creates any peers which are pending creation.
-    /// 
+    ///
     /// This *only* creates the peers and adds them to the `Network`. It does not take other action. Newly created peers are only aware of the leader and themself.
     fn spawn_new_peers(&mut self) -> Result<()> {
         let storage = MemStorage::new();
         let new_peers = self.new_peers();
         info!("Creating new peers. {:?}", new_peers);
-        for id in new_peers.voters {
+        for &id in new_peers.voters() {
             let raft = Raft::new(
                 &Config {
                     id,
@@ -794,7 +1013,7 @@ impl Scenario {
             )?;
             self.peers.insert(id, raft.into());
         }
-        for id in new_peers.learners {
+        for &id in new_peers.learners() {
             let raft = Raft::new(
                 &Config {
                     id,
@@ -811,7 +1030,12 @@ impl Scenario {
 
     /// Return the current leader.
     fn leader(&self) -> u64 {
-        let (id, _) = self.peers.iter().find(|(_, peer)| peer.state == StateRole::Leader).unwrap();
+        let id = self
+            .peers
+            .iter()
+            .find(|(_, peer)| peer.state == StateRole::Leader)
+            .map(|(id, _)| id)
+            .unwrap_or(&INVALID_ID);
         *id
     }
 
@@ -819,14 +1043,17 @@ impl Scenario {
     fn new_peers(&self) -> Configuration {
         let all_old = self
             .old_configuration
-            .voters
-            .union(&self.old_configuration.learners)
+            .voters()
+            .union(&self.old_configuration.learners())
             .cloned()
             .collect::<FxHashSet<_>>();
         Configuration::new(
-            self.new_configuration.voters.difference(&all_old).cloned(),
             self.new_configuration
-                .learners
+                .voters()
+                .difference(&all_old)
+                .cloned(),
+            self.new_configuration
+                .learners()
                 .difference(&all_old)
                 .cloned(),
         )
@@ -840,8 +1067,8 @@ impl Scenario {
         );
         let message = propose_change_message(
             self.leader(),
-            &self.new_configuration.voters,
-            &self.new_configuration.learners,
+            self.new_configuration.voters(),
+            self.new_configuration.learners(),
             self.peers[&1].raft_log.last_index() + 1,
         );
         self.dispatch(vec![message])
@@ -917,21 +1144,8 @@ impl Scenario {
         Ok(())
     }
 
-    fn read_and_dispatch_messages_from<'a>(
-        &mut self,
-        peers: impl IntoIterator<Item = &'a u64>,
-    ) -> Result<()> {
-        let peers = peers.into_iter().cloned();
-        for peer in peers {
-            info!("Reading and dispatching messages from {}", peer);
-            let messages = self.peers.get_mut(&peer).unwrap().read_messages();
-            self.dispatch(messages)?;
-        }
-        Ok(())
-    }
-
     /// Reads messages from each peer in a given list, and dispatches their message before moving to the next peer.
-    /// 
+    ///
     /// Expects each peer to have a message. If the message is not defintely sent use `read_and_dispatch_messages_from`.
     fn expect_read_and_dispatch_messages_from<'a>(
         &mut self,
@@ -982,7 +1196,7 @@ impl Scenario {
         entry_type: ConfChangeType,
     ) {
         let peers = peers.into_iter().collect::<Vec<_>>();
-        self.expect_apply_transition_entry(peers.clone(), entry_type);
+        self.expect_apply_transition_entry(peers.clone(), entry_type).unwrap();
         self.assert_transition_entry_at(peers, index, entry_type)
     }
 }

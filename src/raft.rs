@@ -1112,7 +1112,7 @@ impl<T: Storage> Raft<T> {
     /// This **must** only be called on `Entry` which holds an `Entry` of with `EntryType::ConfChange` and the `data` field being a serialized `ConfChange`.
     ///
     /// This `ConfChange` must be of variant `BeginConfChange` and contain a `configuration` value.
-    // TODO: Make this return a result.
+    // TODO: Make this return a result instead of panic.
     #[inline(always)]
     pub fn begin_membership_change(&mut self, entry: &Entry) -> Result<()> {
         trace!(
@@ -1124,11 +1124,15 @@ impl<T: Storage> Raft<T> {
         // Notably, if another is happening now.
         assert_eq!(entry.get_entry_type(), EntryType::EntryConfChange);
         let conf_change = protobuf::parse_from_bytes::<ConfChange>(entry.get_data())?;
-        assert_eq!(conf_change.get_change_type(), ConfChangeType::BeginConfChange);
+        assert_eq!(
+            conf_change.get_change_type(),
+            ConfChangeType::BeginConfChange
+        );
         let configuration = conf_change.get_configuration();
         self.began_set_nodes_at = Some(entry.get_index());
         let max_inflights = self.max_inflight;
-        self.mut_prs().begin_config_transition(configuration, Progress::new(1, max_inflights))?;
+        self.mut_prs()
+            .begin_config_transition(configuration, Progress::new(1, max_inflights))?;
         trace!(
             "{} exit begin_membership_change(entry: {:?})",
             self.id,
@@ -1154,7 +1158,7 @@ impl<T: Storage> Raft<T> {
     /// This **must** only be called on `Entry` which holds an `Entry` of with `EntryType::ConfChange` and the `data` field being a serialized `ConfChange`.
     ///
     /// This `ConfChange` must be of variant `FinalizeConfChange` and contain no `configuration` value.
-    // TODO: Make this return a result.
+    // TODO: Make this return a result instead of panic.
     #[inline(always)]
     pub fn finalize_membership_change(&mut self, entry: &Entry) -> Result<()> {
         trace!(
@@ -1171,6 +1175,19 @@ impl<T: Storage> Raft<T> {
             conf_change.get_change_type(),
             ConfChangeType::FinalizeConfChange
         );
+        // Joint Consensus, in the Raft paper, states the leader should step down and become a follower if it is removed during a transition.
+        let leader_in_new_set = self
+            .prs()
+            .next_configuration()
+            .as_ref()
+            .map(|config| config.contains(&self.leader_id)).ok_or_else(|| Error::NoPendingTransition)?;
+        if !leader_in_new_set {
+            let last_term = self.raft_log.last_term();
+            if self.state == StateRole::Leader {
+                self.become_follower(last_term, INVALID_ID);
+            }
+        }
+
         self.mut_prs().finalize_config_transition()?;
         trace!(
             "{} exit finalize_membership_change(entry: {:?})",
@@ -2007,7 +2024,8 @@ impl<T: Storage> Raft<T> {
         config.valid()?;
         debug!(
             "Replicating SetNodes with voters ({:?}), learners ({:?}).",
-            config.voters, config.learners
+            config.voters(),
+            config.learners()
         );
         // Prep a configuration change to append.
         let mut conf_change = ConfChange::new();

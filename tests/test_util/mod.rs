@@ -310,7 +310,10 @@ impl Network {
     }
 
     pub fn read_messages(&mut self) -> Vec<Message> {
-        self.peers.iter_mut().flat_map(|(peer, progress)| progress.read_messages()).collect()
+        self.peers
+            .iter_mut()
+            .flat_map(|(_peer, progress)| progress.read_messages())
+            .collect()
     }
 
     pub fn send(&mut self, msgs: Vec<Message>) {

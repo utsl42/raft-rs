@@ -302,7 +302,8 @@ impl<T: Storage> RawNode<T> {
     /// Takes the conf change and applies it.
     pub fn apply_conf_change(&mut self, cc: &ConfChange) -> ConfState {
         warn!("Got ConfChange");
-        if cc.get_node_id() == INVALID_ID && cc.get_change_type() != ConfChangeType::BeginConfChange {
+        if cc.get_node_id() == INVALID_ID && cc.get_change_type() != ConfChangeType::BeginConfChange
+        {
             let mut cs = ConfState::new();
             cs.set_nodes(self.raft.prs().voter_ids().iter().cloned().collect());
             cs.set_learners(self.raft.prs().learner_ids().iter().cloned().collect());
@@ -313,7 +314,10 @@ impl<T: Storage> RawNode<T> {
             ConfChangeType::AddNode => self.raft.add_node(nid),
             ConfChangeType::AddLearnerNode => self.raft.add_learner(nid),
             ConfChangeType::RemoveNode => self.raft.remove_node(nid),
-            ConfChangeType::BeginConfChange => self.raft.propose_config_transition(cc.get_configuration()).unwrap(),
+            ConfChangeType::BeginConfChange => self
+                .raft
+                .propose_config_transition(cc.get_configuration())
+                .unwrap(),
             ConfChangeType::FinalizeConfChange => {
                 self.raft.mut_prs().finalize_config_transition().unwrap();
             }
