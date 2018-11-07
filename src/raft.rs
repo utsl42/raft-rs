@@ -30,6 +30,7 @@ use std::cmp;
 use eraftpb::{Entry, EntryType, HardState, Message, MessageType, Snapshot};
 use fxhash::FxHashMap;
 use protobuf::RepeatedField;
+use protobuf::Message as pbMessage;
 use rand::{self, Rng};
 
 use super::errors::{Error, Result, StorageError};
@@ -178,6 +179,12 @@ pub struct Raft<T: Storage> {
 
     /// Tag is only used for logging
     tag: String,
+
+    /// Limits the aggregate byte size of the uncommitted entries that may be appended to a leader's
+    /// log. Once this limit is exceeded, proposals will begin to return ErrProposalDropped errors.
+    /// Note: 0 for no limit.
+    max_uncommitted_entries_size: usize,
+    uncommitted_size: usize,
 }
 
 trait AssertSend: Send {}
@@ -258,6 +265,8 @@ impl<T: Storage> Raft<T> {
             max_election_timeout: c.max_election_tick(),
             skip_bcast_commit: c.skip_bcast_commit,
             tag: c.tag.to_owned(),
+            max_uncommitted_entries_size: c.max_uncommitted_entries_size,
+            uncommitted_size: 0,
         };
         for p in peers {
             let pr = Progress::new(1, r.max_inflight);
@@ -1389,6 +1398,14 @@ impl<T: Storage> Raft<T> {
                     return Err(Error::ProposalDropped);
                 }
 
+                if !self.increase_uncommitted_size(m.get_entries()) {
+                    debug!(
+                        "{} appending new entries to log would exceed uncommitted entry size limit; dropping proposal",
+                        self.tag,
+                    );
+                    return Err(Error::ProposalDropped);
+                }
+
                 for (i, e) in m.mut_entries().iter_mut().enumerate() {
                     if e.get_entry_type() == EntryType::EntryConfChange {
                         if self.has_pending_conf() {
@@ -2015,5 +2032,41 @@ impl<T: Storage> Raft<T> {
     /// Stops the tranfer of a leader.
     pub fn abort_leader_transfer(&mut self) {
         self.lead_transferee = None;
+    }
+
+    /// increase_uncommitted_size computes the size of the proposed entries and
+    /// determines whether they would push leader over its max_uncommitted_entries_size limit.
+    /// If the new entries would exceed the limit, the method returns false. If not,
+    /// the increase in uncommitted entry size is recorded and the method returns
+    /// true.
+    fn increase_uncommitted_size(&mut self, entries: &[Entry]) -> bool {
+        let sum : usize = entries.iter().map(|x| x.compute_size() as usize).sum();
+
+        if self.max_uncommitted_entries_size > 0 && self.uncommitted_size+sum > self.max_uncommitted_entries_size {
+            return false
+        }
+        self.uncommitted_size += sum;
+        true
+    }
+
+    /// reduce_uncommitted_size accounts for the newly committed entries by decreasing
+    /// the uncommitted entry size limit.
+    // pub fn reduce_uncommitted_size(&mut self, entries: Vec<Entry>) {
+    pub fn reduce_uncommitted_size(&mut self, entries: &[Entry]) {
+        if self.uncommitted_size == 0 {
+            // Followers don't need to track the limit.
+            return
+        }
+
+        let sum: usize = entries.iter().map(|x| x.compute_size() as usize).sum();
+
+        if sum > self.uncommitted_size {
+            // uncommittedSize may underestimate the size of the uncommitted Raft
+            // log tail but will never overestimate it. Saturate at 0 instead of
+            // allowing overflow.
+            self.uncommitted_size = 0
+        } else {
+            self.uncommitted_size -= sum
+        }
     }
 }

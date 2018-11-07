@@ -282,6 +282,9 @@ impl<T: Storage> RawNode<T> {
         if !rd.read_states.is_empty() {
             self.raft.read_states.clear();
         }
+        if let Some(entries) = rd.committed_entries {
+            self.raft.reduce_uncommitted_size(&entries);
+        }
     }
 
     fn commit_apply(&mut self, applied: u64) {
